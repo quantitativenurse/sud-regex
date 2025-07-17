@@ -9,17 +9,10 @@ import time
 import pandas as pd
 
 from .checklist import checklist as checklist_abc
-from .helper import (
-    check_common_false_positives,
-    check_for_substance,
-    check_negation,
-    discharge_instructions,
-    preview_string_matches,
-    regex_extract,
-    remove_line_break,
-    remove_tobacco_mentions,
-    set_terms,
-)
+from .helper import (check_common_false_positives, check_for_substance,
+                     check_negation, discharge_instructions,
+                     preview_string_matches, regex_extract, remove_line_break,
+                     remove_tobacco_mentions, set_terms)
 from .termslist import termslist as default_termslist
 
 __all__ = [
