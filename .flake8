@@ -1,0 +1,17 @@
+[flake8]
+# Avoid linting our virtualenv, build artifacts, or caches
+exclude =
+    .venv,
+    build,
+    dist,
+    __pycache__
+
+# Allow Black-compatible line lengths and ignore a couple whitespace quirks
+max-line-length = 100
+extend-ignore = E203, W503
+
+
+per-file-ignores =
+    SUDRegex/checklist.py: E501
+    SUDRegex/helper.py: E501,F401,F821,F541,E731,E266,F841
+    setup.py: E501
