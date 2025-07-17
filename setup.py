@@ -18,7 +18,7 @@ setup(
     ],
     extras_require={
         "dev": [
-            "black==25.1.0+computecanada",
+            "black==25.1.0",
             "flake8==7.3.0",
             "isort==6.0.1",
             "pytest",
