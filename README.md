@@ -1,5 +1,5 @@
 [![CI](https://github.com/quantitativenurse/sud-regex/actions/workflows/lint.yml/badge.svg)](https://github.com/quantitativenurse/sud-regex/actions)
-[![License](https://img.shields.io/github/license/quantitativenurse/sud-regex.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 
 # SUDRegex
