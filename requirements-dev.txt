@@ -1,0 +1,4 @@
+black==25.1.0+computecanada
+flake8==7.3.0
+isort==6.0.1
+pytest

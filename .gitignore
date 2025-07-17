@@ -1,0 +1,46 @@
+# Byte‑compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+.flake8
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Test / coverage output
+.pytest_cache/
+.coverage
+htmlcov/
+testing/
+
+# Mypy cache
+.mypy_cache/
+
+# Logs and scratch files
+*.log
+*.slurm
+test_output*.csv
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime*
+*.sw?
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
