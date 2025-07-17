@@ -7,7 +7,10 @@ import os
 import re
 import sys
 import time
-from typing import List, Union, Pattern as RePattern
+from typing import List
+from typing import Pattern as RePattern
+from typing import Union
+
 import numpy as np
 import pandas as pd
 
@@ -16,15 +19,19 @@ PRINT = False
 # injected term storage (set by main)
 TERMS_LIST: list[str] = []
 TERMS_COMPILED: list[re.Pattern] = []
+
+
 def _finditer(pat: RePattern | str, text: str):
     if isinstance(pat, re.Pattern):
         return pat.finditer(text)
-    return re.finditer(pat, text, flags=re.IGNORECASE|re.MULTILINE)
+    return re.finditer(pat, text, flags=re.IGNORECASE | re.MULTILINE)
+
 
 def _search(term: RePattern | str, text: str):
     if isinstance(term, re.Pattern):
         return term.search(text) is not None
-    return re.search(term, text, flags=re.IGNORECASE|re.MULTILINE) is not None
+    return re.search(term, text, flags=re.IGNORECASE | re.MULTILINE) is not None
+
 
 def set_terms(terms: list[str]) -> None:
     """
@@ -46,6 +53,7 @@ total_memory, used_memory, free_memory = map(
 
 # note filters, for removing symbols etc.
 # our helper (with both marker‑removal and whitespace‑collapse)
+
 
 def remove_line_break(
     text: Union[str, bytes],
@@ -74,7 +82,6 @@ def remove_line_break(
     # 2) collapse any run of whitespace to a single space
     s = re.sub(r"\s+", " ", s).strip()
     return s
-
 
 
 def previews_batch(checklist, df_summarized, n_notes=2, span=300):
@@ -353,8 +360,8 @@ def regex_search_file(pat, new_col_name, df_to_search, metadata, preview=True):
     OUTPUTS: df that has been searched for matches with note_text and matches
     """
     from re import Pattern
-    # print("Regex Search File: RAM memory % used:", round((used_memory/total_memory) * 100, 2))
 
+    # print("Regex Search File: RAM memory % used:", round((used_memory/total_memory) * 100, 2))
     # create empty dataframe for storing counts
     # new_col_name: is col_name taken in new_column_and_search and specified in each ABC checklist
     # item
@@ -427,12 +434,14 @@ def check_for_substance(pat, col_name, col_name_substance, df_searched, span=100
     Outputs: searched df with additional substance matches
     """
     import re
+
     import pandas as pd
+
     from SUDRegex.helper import TERMS_LIST
 
     # internal helper to iterate matches without mixing flags on compiled patterns
     def _iter_matches(pattern, text):
-        if hasattr(pattern, 'finditer'):
+        if hasattr(pattern, "finditer"):
             return pattern.finditer(text)
         return re.finditer(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
 
@@ -441,7 +450,7 @@ def check_for_substance(pat, col_name, col_name_substance, df_searched, span=100
 
     for i in range(matches.shape[0]):
         match_found = False
-        text = matches['note_text'].iloc[i]
+        text = matches["note_text"].iloc[i]
         for m in _iter_matches(pat, text):
             start, stop = m.span()
             # expand window
@@ -461,14 +470,19 @@ def check_for_substance(pat, col_name, col_name_substance, df_searched, span=100
 
     # attach results
     matches[col_name_substance] = yes_or_no
-    add_df = pd.DataFrame({col_name_substance: yes_or_no}, index=matches['note_id']).reset_index()
-    df_substance = df_searched.merge(add_df, on='note_id', how='left')
+    add_df = pd.DataFrame(
+        {col_name_substance: yes_or_no}, index=matches["note_id"]
+    ).reset_index()
+    df_substance = df_searched.merge(add_df, on="note_id", how="left")
     return df_substance
+
+
 # QUESTION: Originally, why did we only search for negation terms in the window before the match (text[max(0, start-span):stop]) and not include characters after the match as well?
-# change I made 
-#Instead of only looking before the match for negation cues, it now grabs a slice of text 
+# change I made
+# Instead of only looking before the match for negation cues, it now grabs a slice of text
 # from span characters before the match start through span characters after the match end:
- #Note “foo was not observed” (negation after “foo”), we still catch the “not”.
+# Note “foo was not observed” (negation after “foo”), we still catch the “not”.
+
 
 def check_negation(
     pat,

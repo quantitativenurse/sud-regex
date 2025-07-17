@@ -8,7 +8,7 @@ setup(
     long_description_content_type="text/markdown",
     author="Christy Parker, Dagmawi Negesse",
     author_email="dagmawi.z.negesse@vumc.org",
-    packages=find_packages(),  
+    packages=find_packages(),
     include_package_data=True,
     install_requires=[
         "pandas",
@@ -22,8 +22,9 @@ setup(
             "flake8==7.3.0",
             "isort==6.0.1",
             "pytest",
-        ],  
-        "parallel": ["pandarallel"]},
+        ],
+        "parallel": ["pandarallel"],
+    },
     python_requires=">=3.7",
     entry_points={
         "console_scripts": [

@@ -1,16 +1,19 @@
-import os
 import importlib.util
-import pandas as pd
+import os
 import re
 import tempfile
 
+import pandas as pd
 import pytest
+
 import SUDRegex
+
 
 def test_version_and_all():
     assert isinstance(SUDRegex.__version__, str)
     for name in ["extract_df", "remove_line_break", "check_for_substance"]:
         assert name in SUDRegex.__all__
+
 
 def test_import_python_object(tmp_path):
     # write a small module
@@ -25,12 +28,12 @@ def test_import_python_object(tmp_path):
     assert y == "hello"
     assert hasattr(mod, "x") and hasattr(mod, "y")
 
+
 def test_extract_df_basic(tmp_path):
     # prepare a small dataframe and a trivial checklist
-    df = pd.DataFrame({
-        "note_id": [1,2],
-        "note_text": ["apple or orange", "banana only"]
-    })
+    df = pd.DataFrame(
+        {"note_id": [1, 2], "note_text": ["apple or orange", "banana only"]}
+    )
     # checklist: look for 'apple' only
     checklist = {
         "apple_chk": {
@@ -38,7 +41,7 @@ def test_extract_df_basic(tmp_path):
             "col_name": "apple_chk",
             "negation": False,
             "substance": False,
-            "preview": False
+            "preview": False,
         }
     }
     out = SUDRegex.extract_df(
@@ -48,7 +51,7 @@ def test_extract_df_basic(tmp_path):
         remove_linebreaks=False,
         keys=None,
         parallel=False,
-        debug=False
+        debug=False,
     )
     # apple appears only in note_id 1
     assert out.loc[out.note_id == 1, "apple_chk"].iloc[0] >= 1

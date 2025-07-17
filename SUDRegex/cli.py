@@ -14,7 +14,7 @@ def main():
     parser.add_argument(
         "--extract", action="store_true", help="Perform regular expression extraction"
     )
-   
+
     parser.add_argument("--in_file", help="Path to text file for searching")
     parser.add_argument("--out_file", help="Path to where results should be exported")
     parser.add_argument("--checklist", help="Path to the checklist file or variable")
