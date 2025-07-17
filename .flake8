@@ -12,6 +12,7 @@ extend-ignore = E203, W503
 
 
 per-file-ignores =
-    SUDRegex/checklist.py: E501
+    SUDRegex/checklist.py: E501, W604
+    unittests/*.py: F401
     SUDRegex/helper.py: E501,F401,F821,F541,E731,E266,F841
     setup.py: E501
