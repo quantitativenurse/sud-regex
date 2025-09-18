@@ -86,6 +86,7 @@ def _write_summary(artifacts_dir: str, summary_file: str | None):
     # Also echo a short pointer to the console
     print(f"[summary] wrote {sfile} ({'no mismatches' if nonempty == 0 else 'has mismatches'})")
 
+
 def pytest_sessionfinish(session, exitstatus):
     # Always write a summary at the end
     cfg = session.config
