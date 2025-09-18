@@ -36,3 +36,5 @@ jobs:
 
       - name: flake8
         run: flake8 .
+        env:
+          PYTHONWarnings: "ignore::SyntaxWarning"
