@@ -25,7 +25,7 @@ A lightweight, high-throughput pipeline for regex-driven extraction with negatio
 
 ```bash
 # From PyPI (enable after publish)
-pip install SUDRegex
+pip install sud-regex
 
 
 # From source (dev)

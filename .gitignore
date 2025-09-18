@@ -18,6 +18,7 @@ dist/
 venv/
 ENV/
 env/
+.env
 
 # Test / coverage output
 .pytest_cache/
