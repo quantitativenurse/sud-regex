@@ -2,21 +2,18 @@
 Helper file so that functions are stored separately from main execution file.
 """
 
-import glob
 import os
 import re
 import sys
-import time
 from typing import List
 from typing import Pattern as RePattern
 from typing import Union
 
-import numpy as np
 import pandas as pd
 
 PRINT = False
 
-# injected term storage (set by main)
+# injected term storage (_terms by main)
 TERMS_LIST: list[str] = []
 TERMS_COMPILED: list[re.Pattern] = []
 
@@ -39,17 +36,16 @@ def set_terms(terms: list[str]) -> None:
     """
     global TERMS_LIST, TERMS_COMPILED
     TERMS_LIST = terms
-    TERMS_COMPILED = [
-        re.compile(re.escape(t), re.IGNORECASE | re.MULTILINE) for t in TERMS_LIST
-    ]
+    TERMS_COMPILED = [re.compile(re.escape(t), re.IGNORECASE | re.MULTILINE) for t in TERMS_LIST]
     if PRINT:
         print("Using terms:", TERMS_LIST)
 
 
 # Memory usage
-total_memory, used_memory, free_memory = map(
-    int, os.popen("free -t -m").readlines()[-1].split()[1:]
-)
+try:
+    total_memory, used_memory, free_memory = map(int, os.popen("free -t -m").readlines()[-1].split()[1:])
+except Exception:
+    total_memory, used_memory, free_memory = (0, 0, 0)
 
 # note filters, for removing symbols etc.
 # our helper (with both marker‑removal and whitespace‑collapse)
@@ -88,82 +84,71 @@ def previews_batch(checklist, df_summarized, n_notes=2, span=300):
     """
     The following function previews the notes and writes them to a text file.
     """
-
     original_stdout = sys.stdout
-
     with open("note_previews.txt", "w") as f:
         sys.stdout = f
-
-        columns = list(results_saved)
-        columns.remove("note_id")
-        columns.remove("note_text")
+        columns = list(df_summarized)
+        if "note_id" in columns:
+            columns.remove("note_id")  # optional safety
+        if "note_text" in columns:
+            columns.remove("note_text")  # optional safety
 
         for i in checklist:
             col_name = checklist[i]["col_name"]
-
-            if col_name in columns:
-
-                lab = checklist[i]["lab"]
-                if PRINT:
-                    print("\n", lab, "\n")
-
-                pat = checklist[i]["pat"]
-                if PRINT:
-                    print("Pattern:", pat, "\n")
-
-                if "substance" in checklist[i] and checklist[i]["substance"]:
-                    col_name_substance = col_name + "_SUBSTANCE_MATCHED"
-                    if checklist[i]["negation"]:
-                        col_name_negated = col_name_substance + "_NEG"
-                elif checklist[i]["negation"]:
-                    col_name_negated = col_name + "_NEG"
-
-                if "substance" in checklist[i] and checklist[i]["substance"]:
-                    col_name_list = [col_name_substance]
-                    if checklist[i]["negation"]:
-                        col_name_list = [col_name_negated]
-                elif checklist[i]["negation"]:
-                    col_name_list = [col_name_negated]
-                else:
-                    col_name_list = [col_name]
-
-                if PRINT:
-                    print(
-                        "Columns related to this checklist item:", col_name_list, "\n"
-                    )
-
-            else:
+            if col_name not in columns:
                 continue
+
+            lab = checklist[i]["lab"]
+            if PRINT:
+                print("\n", lab, "\n")
+
+            pat = checklist[i]["pat"]
+            if PRINT:
+                print("Pattern:", pat, "\n")
+
+            if "substance" in checklist[i] and checklist[i]["substance"]:
+                col_name_substance = col_name + "_SUBSTANCE_MATCHED"
+                if checklist[i]["negation"]:
+                    col_name_negated = col_name_substance + "_NEG"
+            elif checklist[i]["negation"]:
+                col_name_negated = col_name + "_NEG"
+
+            if "substance" in checklist[i] and checklist[i]["substance"]:
+                col_name_list = [col_name_substance]
+                if checklist[i]["negation"]:
+                    col_name_list = [col_name_negated]
+            elif checklist[i]["negation"]:
+                col_name_list = [col_name_negated]
+            else:
+                col_name_list = [col_name]
+
+            if PRINT:
+                print("Columns related to this checklist item:", col_name_list, "\n")
 
             for col_name in col_name_list:
                 if PRINT:
                     print("Column Name:", col_name, "\n")
-                if n_notes > len(results_saved[results_saved[col_name] > 0]):
-                    n_notes = len(results_saved[results_saved[col_name] > 0])
 
-                matches = results_saved[results_saved[col_name] > 0]
-                matches.sample(n_notes, random_state=123)
+                total = len(df_summarized[df_summarized[col_name] > 0])
+                k = min(n_notes, total)
+                matches = df_summarized[df_summarized[col_name] > 0]
+                if k == 0:
+                    continue
+                matches = matches.sample(k, random_state=123)
 
-                if n_notes > len(matches.index):
-                    n_notes = len(matches.index)
-
-                for i in range(matches.shape[0]):
+                for j in range(matches.shape[0]):  # minor: avoid reusing i
                     if PRINT:
-                        print("~~~ " + str(matches["note_id"].iloc[i]) + " ~~~")
+                        print("~~~ " + str(matches["note_id"].iloc[j]) + " ~~~")
 
-                    for m in re.finditer(
-                        pat,
-                        matches["note_text"].iloc[i],
-                        flags=re.IGNORECASE | re.MULTILINE,
-                    ):
+                    text = matches["note_text"].iloc[j]  # here is the change
+                    for m in _finditer(pat, text):  # here is the change
                         if PRINT:
                             print(m, "\n")
 
                         start, stop = m.span()
-                        start = max(0, start - span)
-                        stop = max(stop, stop + span)
-
-                        text_print = matches["note_text"].iloc[i][start:stop]
+                        s = max(0, start - span)  # here is the change
+                        e = min(len(text), stop + span)  # here is the change
+                        text_print = text[s:e]  # here is the change
 
                         if PRINT:
                             print(text_print)
@@ -174,9 +159,7 @@ def previews_batch(checklist, df_summarized, n_notes=2, span=300):
         sys.stdout = original_stdout
 
 
-def regex_extract(
-    checklist, df_to_analyze, metadata, preview_count, expected_row_count
-):
+def regex_extract(checklist, df_to_analyze, metadata, preview_count, expected_row_count):
     """
     Applies the checklist of regex searches to the data frame, with optional substance and negation checks.
     """
@@ -195,166 +178,179 @@ def regex_extract(
         if PRINT:
             print(f"[DEBUG]  → df_to_analyze has {actual_rows} rows")
 
-        assert (
-            actual_rows == expected_row_count
-        ), f"Row counts do not match ({actual_rows} != {expected_row_count})"
+        assert actual_rows == expected_row_count, f"Row counts do not match ({actual_rows} != {expected_row_count})"
 
         pat = checklist[i]["pat"]
         col_name = checklist[i]["col_name"]
         if PRINT:
-            print(
-                f"[DEBUG]  → pattern='{pat.pattern if hasattr(pat, 'pattern') else pat}', "
-                f"col_name='{col_name}'"
-            )
+            print(f"[DEBUG]  → pattern='{pat.pattern if hasattr(pat, 'pattern') else pat}', " f"col_name='{col_name}'")
 
-        has_substance = bool(checklist[i].get("substance"))
+        # Treat either 'substance' OR 'opioid' as the gating flag
+        has_substance = bool(checklist[i].get("substance") or checklist[i].get("opioid"))
         has_negation = bool(checklist[i].get("negation"))
+
         if PRINT:
             print(f"[DEBUG]  → substance={has_substance}, negation={has_negation}")
 
-        # initial search
+        # Initial search
         if PRINT:
             print(f"[DEBUG]  → Calling regex_search_file for '{col_name}'")
-        df_searched = regex_search_file(
-            pat, col_name, df_to_analyze, metadata, preview=True
-        )
+        df_searched = regex_search_file(pat, col_name, df_to_analyze, metadata, preview=True)
 
+        base_sum = int(pd.to_numeric(df_searched[col_name], errors="coerce").fillna(0).sum())
         if PRINT:
-            print(
-                f"[DEBUG]  → After regex_search_file: df_searched['{col_name}'].sum()="
-                f"{df_searched[col_name].sum()}"
-            )
+            print(f"[DEBUG]  → After regex_search_file: df_searched['{col_name}'].sum()={base_sum}")
 
-        # substance + negation branch
+        # Track which column is the "active" mask throughout downstream steps
+        active_col = col_name
+
+        # substance (+ optional negation) branch
         if has_substance:
             if PRINT:
                 print(f"[DEBUG]  → Entering substance branch for '{col_name}'")
-            if df_searched[col_name].sum() > 0:
-                if PRINT:
-                    print(
-                        f"[DEBUG]    • Found {df_searched[col_name].sum()} initial matches"
-                    )
-                df_searched = check_for_substance(
-                    pat, col_name, col_name + "_SUBSTANCE_MATCHED", df_searched
-                )
-                if PRINT:
-                    print(
-                        f"[DEBUG]    • After check_for_substance: "
-                        f"{df_searched[col_name + '_SUBSTANCE_MATCHED'].sum()} matches"
-                    )
 
+            if base_sum > 0:
+                # Add *_SUBSTANCE_MATCHED
+                df_searched = check_for_substance(pat, col_name, f"{col_name}_SUBSTANCE_MATCHED", df_searched)
+                active_col = f"{col_name}_SUBSTANCE_MATCHED"
+                sub_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
+                if PRINT:
+                    print(f"[DEBUG]    • After check_for_substance: {sub_sum} matches")
+
+                # Optional negation on the substance-filtered hits
                 if has_negation:
                     if PRINT:
-                        print(f"[DEBUG]    • Entering negation checks")
-                    if df_searched[col_name + "_SUBSTANCE_MATCHED"].sum() > 0:
+                        print("[DEBUG]    • Entering negation checks")
+                    if sub_sum > 0:
                         df_searched = check_negation(
                             pat,
-                            col_name + "_SUBSTANCE_MATCHED",
-                            col_name + "_SUBSTANCE_MATCHED_NEG",
+                            active_col,  # input mask (*_SUBSTANCE_MATCHED)
+                            f"{active_col}_NEG",  # output mask (*_SUBSTANCE_MATCHED_NEG)
                             df_searched,
                             t=[],
                             neg=True,
                             span=65,
                         )
+                        active_col = f"{active_col}_NEG"  # now *_SUBSTANCE_MATCHED_NEG
+                        neg_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
                         if PRINT:
-                            print(
-                                f"[DEBUG]    • After check_negation: "
-                                f"{df_searched[col_name + '_SUBSTANCE_MATCHED_NEG'].sum()} negated matches"
-                            )
+                            print(f"[DEBUG]    • After check_negation: {neg_sum} kept")
                     else:
+                        # Ensure column exists even if no substance matches
+                        df_searched[f"{active_col}_NEG"] = 0
+                        active_col = f"{active_col}_NEG"
                         if PRINT:
-                            print(
-                                f"[DEBUG]    • No substance matches; setting negation column to 0"
-                            )
-                        df_searched[col_name + "_SUBSTANCE_MATCHED_NEG"] = 0
+                            print(f"[DEBUG]    • No substance matches; set {active_col}=0")
             else:
-                if PRINT:
-                    print(
-                        f"[DEBUG]    • No initial matches; zeroing substance and negation"
-                    )
-                df_searched[col_name + "_SUBSTANCE_MATCHED"] = 0
+                # No base matches — create downstream columns to avoid merge KeyErrors
+                df_searched[f"{col_name}_SUBSTANCE_MATCHED"] = 0
                 if has_negation:
-                    df_searched[col_name + "_SUBSTANCE_MATCHED_NEG"] = 0
+                    df_searched[f"{col_name}_SUBSTANCE_MATCHED_NEG"] = 0
+                    active_col = f"{col_name}_SUBSTANCE_MATCHED_NEG"
+                else:
+                    active_col = f"{col_name}_SUBSTANCE_MATCHED"
+                if PRINT:
+                    print(f"[DEBUG]    • No initial matches; zeroed {active_col}")
 
         # negation-only branch
         elif has_negation:
             if PRINT:
                 print(f"[DEBUG]  → Entering negation-only branch for '{col_name}'")
-            if df_searched[col_name].sum() > 0:
-                df_searched = check_negation(
-                    pat,
-                    col_name,
-                    col_name + "_NEG",
-                    df_searched,
-                    t=[],
-                    neg=True,
-                    span=65,
-                )
+            if base_sum > 0:
+                df_searched = check_negation(pat, col_name, f"{col_name}_NEG", df_searched, t=[], neg=True, span=65)
+                active_col = f"{col_name}_NEG"
+                neg_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
                 if PRINT:
-                    print(
-                        f"[DEBUG]    • After check_negation: {df_searched[col_name + '_NEG'].sum()} negated"
-                    )
+                    print(f"[DEBUG]    • After check_negation: {neg_sum} negated")
             else:
+                df_searched[f"{col_name}_NEG"] = 0
+                active_col = f"{col_name}_NEG"
                 if PRINT:
-                    print(
-                        f"[DEBUG]    • No initial matches; setting '{col_name}_NEG' to 0"
-                    )
-                df_searched[col_name + "_NEG"] = 0
+                    print(f"[DEBUG]    • No initial matches; set {active_col}=0")
 
-        # neither substance nor negation
+        # base branch (neither substance nor negation)
         else:
             if PRINT:
-                print(
-                    f"[DEBUG]  → No substance/negation for '{col_name}', performing discharge/fp if matches"
-                )
-            if df_searched[col_name].sum() > 0:
-                df_searched = discharge_instructions(
-                    pat, df_searched, col_name, span=250
-                )
+                print(f"[DEBUG]  → No substance/negation flags for '{col_name}' (base branch)")
+
+        # Pruning policy to match published behavior:
+        # - prune if there is a negation branch OR there is no substance/opioid gate
+        # - skip pruning for opioid-only (no negation) items
+        should_prune = has_negation or not has_substance
+
+        if active_col in df_searched.columns:
+            pre_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
+            if PRINT:
+                print(f"[DEBUG]    • Before pruning on {active_col}: {pre_sum} kept")
+
+            if should_prune and pre_sum > 0:
+                # Discharge instruction pruning (wide window)
+                df_searched = discharge_instructions(pat, df_searched, active_col, span=250)
+                post_discharge_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
                 if PRINT:
-                    print(f"[DEBUG]    • After discharge_instructions")
+                    print(f"[DEBUG]    • After discharge_instructions on {active_col}: {post_discharge_sum} kept")
+
+                # Common false positive pruning if provided in checklist
+                common_fp = checklist[i].get("common_fp") or []
+                if common_fp:
+                    df_searched = check_common_false_positives(pat, df_searched, active_col, common_fp, span=65)
+                    post_fp_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
+                    if PRINT:
+                        print(f"[DEBUG]    • After common FP pruning on {active_col}: {post_fp_sum} kept")
             else:
                 if PRINT:
-                    print(f"[DEBUG]    • No matches; skipping extra checks")
+                    print(
+                        f"[DEBUG]    • Skipping pruning for {active_col} "
+                        f"(matches={pre_sum}, has_substance={has_substance}, has_negation={has_negation})"
+                    )
+        else:
+            if PRINT:
+                print(f"[DEBUG]    • Skipping pruning (missing column {active_col})")
 
-        # preview
+        # Optional preview
         if checklist[i].get("preview"):
             if PRINT:
                 print(f"[DEBUG]  → Previewing {preview_count} matches for '{col_name}'")
-            preview_string_matches(
-                pat, col_name, df_searched, n_notes=preview_count, span=100
-            )
+            preview_string_matches(pat, col_name, df_searched, n_notes=preview_count, span=100)
 
-        # merge into metadata
+        # Build merge column set, ensuring active_col is present
         merge_cols = ["note_id", col_name]
         if has_substance:
-            merge_cols.append(col_name + "_SUBSTANCE_MATCHED")
-        if has_negation:
-            merge_cols.append(
-                merge_cols[-1] + ("_NEG" if not has_substance else "_NEG")
-            )
+            merge_cols.append(f"{col_name}_SUBSTANCE_MATCHED")
+        if has_negation and has_substance:
+            merge_cols.append(f"{col_name}_SUBSTANCE_MATCHED_NEG")
+        elif has_negation and not has_substance:
+            merge_cols.append(f"{col_name}_NEG")
+        if active_col not in merge_cols:
+            merge_cols.append(active_col)
+
+        # Create missing columns with zeros before merge to avoid KeyErrors
+        for mc in merge_cols:
+            if mc not in df_searched.columns:
+                df_searched[mc] = 0
 
         if PRINT:
-            print(f"[DEBUG]  → Merging columns {merge_cols} into metadata")
+            cur_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
+            print(f"[DEBUG]  → SUMMARY '{col_name}': base={base_sum} | active({active_col})={cur_sum}")
+            print(f"[DEBUG]  → Merging columns {merge_cols} into metadata (active_col={active_col})")
 
         metadata = metadata.merge(df_searched[merge_cols], on="note_id", how="left")
 
-    metadata = metadata.merge(
-        df_to_analyze[["note_id", "note_text"]], on="note_id", how="left"
-    )
-
+    # Final merge for note_text
+    metadata = metadata.merge(df_to_analyze[["note_id", "note_text"]], on="note_id", how="left")
     if PRINT:
         print(f"[DEBUG] Finished regex_extract: metadata.shape={metadata.shape}")
-
     return metadata
 
 
 def regex_search_file(pat, new_col_name, df_to_search, metadata, preview=True):
     """
-    This function searches the note text in each of the rows of the file and returns the number of matches for the regex.
+    This function searches the note text in each of the rows of the file and
+    returns the number of matches for the regex.
     It concatenates the matches to a summarized df for each note_id
 
-    INPUTS: the pattern from the checklist, the name of the column for the summarized df from the checklist,
+    INPUTS: the pattern from the checklist, the name of the column for the
+    summarized df from the checklist,
     the df to search for matches w/ notes, and preview argument.
 
     OUTPUTS: df that has been searched for matches with note_text and matches
@@ -385,7 +381,7 @@ def regex_search_file(pat, new_col_name, df_to_search, metadata, preview=True):
     # use parallel apply to process multiple notes at the same time
     # for df in dfs:
 
-    ### need to fix - not sure why parallel_apply isn't working with AUDIT
+    # need to fix - not sure why parallel_apply isn't working with AUDIT
     #     df_to_search['note_text'] = df_to_search['note_text'].parallel_apply(remove_line_break)
     #     df_to_search[new_col_name] = df_to_search['note_text'].parallel_apply(pat_search)
     df_to_search["note_text"] = df_to_search["note_text"].apply(remove_line_break)
@@ -405,7 +401,6 @@ def regex_search_file(pat, new_col_name, df_to_search, metadata, preview=True):
     df_searched = metadata.merge(counts[keep_cols], how="left", on="note_id")
 
     # create dataframe of matches for providing descriptive statistics
-    for_counts = df_searched[df_searched[new_col_name] > 0]
     # print('Original pattern search yielded '
     # + str(for_counts[new_col_name].sum()) + ' total matches within '
     # + str(len(np.unique(for_counts['note_id']))) + ' notes.')
@@ -415,13 +410,12 @@ def regex_search_file(pat, new_col_name, df_to_search, metadata, preview=True):
     return df_searched
 
 
+# possible name change for this functino to mask_no_tobacco_mentions
 def remove_tobacco_mentions(text):
-    """Mask mentions of tobacco in the text."""
+    """Mask mentions of no tobacco use in the text."""
     # Extended regular expression to find various mentions of no tobacco use
     tobacco_pattern = r"(Tob(?:acco)?[ -]*(?:use)?[: -]*\b(None|Never|No\s+use|abstains|denies use,? never|ever)\b|Smoking[: -]*None|Smoker[: -]*(?:never|no))"
-    return re.sub(
-        tobacco_pattern, "Tobacco: [Redacted]", str(text), flags=re.IGNORECASE
-    )
+    return re.sub(tobacco_pattern, "Tobacco: [Redacted]", str(text), flags=re.IGNORECASE)
 
 
 def check_for_substance(pat, col_name, col_name_substance, df_searched, span=100):
@@ -470,18 +464,9 @@ def check_for_substance(pat, col_name, col_name_substance, df_searched, span=100
 
     # attach results
     matches[col_name_substance] = yes_or_no
-    add_df = pd.DataFrame(
-        {col_name_substance: yes_or_no}, index=matches["note_id"]
-    ).reset_index()
+    add_df = pd.DataFrame({col_name_substance: yes_or_no}, index=matches["note_id"]).reset_index()
     df_substance = df_searched.merge(add_df, on="note_id", how="left")
     return df_substance
-
-
-# QUESTION: Originally, why did we only search for negation terms in the window before the match (text[max(0, start-span):stop]) and not include characters after the match as well?
-# change I made
-# Instead of only looking before the match for negation cues, it now grabs a slice of text
-# from span characters before the match start through span characters after the match end:
-# Note “foo was not observed” (negation after “foo”), we still catch the “not”.
 
 
 def check_negation(
@@ -618,33 +603,33 @@ def discharge_instructions(pat, df_searched, col_name_discharge, span=350):
     return df
 
 
-def preview_string_matches(
-    pat, col_name, df_searched, col_check=False, n_notes=10, span=100
-):
+def preview_string_matches(pat, col_name, df_searched, col_check=False, n_notes=10, span=100):
     """
     INPUTS: data frame with match data and note text
     OUTPUT: a preview of the string where the match occurs in the note printed out
     """
+    if col_check and col_name not in df_searched.columns:  # optional safety
+        raise KeyError(f"Column '{col_name}' not found in df_searched")
 
-    n_notes = len(df_searched[df_searched[col_name] > 0])
+    hits = df_searched[df_searched[col_name] > 0]
+    hit_count = len(hits)
+    if hit_count == 0 or n_notes <= 0:  # ← minimal guard
+        return
 
-    matches = df_searched[df_searched[col_name] > 0].sample(n_notes, random_state=123)
-
-    if n_notes > len(matches.index):
-        n_notes = len(matches.index)
+    # respect the caller's n_notes
+    k = min(n_notes, hit_count)  # ← don't overwrite n_notes
+    matches = hits.sample(k, random_state=123)
 
     for i in range(matches.shape[0]):
         if PRINT:
             print(str(matches["note_id"].iloc[i]))
-
-        for m in re.finditer(
-            pat, matches["note_text"].iloc[i], flags=re.IGNORECASE | re.MULTILINE
-        ):
+        text = matches["note_text"].iloc[i]
+        for m in _finditer(pat, text):
             start, stop = m.span()
-            start = max(0, start - span)
-            stop = max(stop, stop + span)
+            s = max(0, start - span)
+            e = min(len(text), stop + span)  # to avoid overflow
 
-            text_print = matches["note_text"].iloc[i][start:stop]
+            text_print = text[s:e]
             text_print = (
                 text_print[0:(span)]
                 + "\x1b[0;39;43m"
@@ -657,27 +642,14 @@ def preview_string_matches(
                 x = re.search(term, text_print, flags=re.IGNORECASE | re.MULTILINE)
                 if x:
                     s, e = x.span()
-                    text_print = (
-                        text_print[0:s]
-                        + "\x1b[0;39;43m"
-                        + text_print[s:e]
-                        + "\x1b[0m"
-                        + text_print[e:]
-                    )
+                    text_print = text_print[0:s] + "\x1b[0;39;43m" + text_print[s:e] + "\x1b[0m" + text_print[e:]
 
             neg = ["no ", "not ", "denies", "denial", "doubt", "never", "negative for"]
-
             for term in neg:
                 x = re.search(term, text_print, flags=re.IGNORECASE | re.MULTILINE)
                 if x:
                     s, e = x.span()
-                    text_print = (
-                        text_print[0:s]
-                        + "\x1b[0;39;43m"
-                        + text_print[s:e]
-                        + "\x1b[0m"
-                        + text_print[e:]
-                    )
+                    text_print = text_print[0:s] + "\x1b[0;39;43m" + text_print[s:e] + "\x1b[0m" + text_print[e:]
 
             if PRINT:
                 print(text_print)

@@ -1,18 +1,28 @@
 [flake8]
-# Avoid linting our virtualenv, build artifacts, or caches
+# Avoid linting virtualenvs, build artifacts, and caches
 exclude =
+    .git,
     .venv,
     build,
     dist,
-    __pycache__
+    __pycache__,
+    .mypy_cache,
+    ChecklistValidation/
+# Match Black's line length
+max-line-length = 120
 
-# Allow Black-compatible line lengths and ignore a couple whitespace quirks
-max-line-length = 100
+# Black-compatible whitespace quirks
 extend-ignore = E203, W503
 
-
+# File-specific tolerances
 per-file-ignores =
-    SUDRegex/checklist.py: E501, W604, W605
-    unittests/*.py: F401
-    SUDRegex/helper.py: E501,F401,F821,F541,E731,E266,F841
-    setup.py: E501
+    # Regex-heavy fixtures and tests (allow long lines & unused imports in tests)
+    testing/abc_regex_checklist.py: E124,E127,E128,E261,E262,E501,W291,W605
+    unittests/*.py: E501,F401
+    unittests/conftest.py: E501
+    # Snapshot/legacy checklist with long lines
+    ChecklistValidation/snapshotCheclist.py: E501
+    # If you keep a generated checklist module
+    SUDRegex/checklist.py: E501,W604,W605
+    SUDRegex/helper.py: E501
+    testing/testscript.py : E501

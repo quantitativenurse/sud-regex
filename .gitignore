@@ -43,3 +43,10 @@ test_output*.csv
 # OS files
 .DS_Store
 Thumbs.db
+
+
+
+# folders and testings 
+ChecklistValidation/
+*csv
+*txt

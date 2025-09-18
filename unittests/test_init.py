@@ -31,9 +31,7 @@ def test_import_python_object(tmp_path):
 
 def test_extract_df_basic(tmp_path):
     # prepare a small dataframe and a trivial checklist
-    df = pd.DataFrame(
-        {"note_id": [1, 2], "note_text": ["apple or orange", "banana only"]}
-    )
+    df = pd.DataFrame({"note_id": [1, 2], "note_text": ["apple or orange", "banana only"]})
     # checklist: look for 'apple' only
     checklist = {
         "apple_chk": {
@@ -54,5 +52,5 @@ def test_extract_df_basic(tmp_path):
         debug=False,
     )
     # apple appears only in note_id 1
-    assert out.loc[out.note_id == 1, "apple_chk"].iloc[0] >= 1
-    assert out.loc[out.note_id == 2, "apple_chk"].iloc[0] == 0
+    assert out.loc[out.note_id.astype(str) == "1", "apple_chk"].iloc[0] >= 1
+    assert out.loc[out.note_id.astype(str) == "2", "apple_chk"].iloc[0] == 0
