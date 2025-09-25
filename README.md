@@ -137,10 +137,13 @@ result = sud.extract(
 The default checklist and termslist are available using the below method. 
 
 checklist = sud.checklist_abc
+
 checklist
 
 termslist = sud.default_termslist
+
 termslist 
+
 ---
 
 ## License 
