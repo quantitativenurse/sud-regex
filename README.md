@@ -41,8 +41,8 @@ pip install -e .[dev]   # installs sudregex + black, isort, flake8, pytest, etc.
 ## Usage
 - For interactive usage on notebooks refer to our tutorial <link>
 
+### Quick Start (CLI)
 
-###Quick Start (CLI)
 ```bash
 sudregex --help
 Run extraction (CSV with commas) using the default pruning behavior:
@@ -97,7 +97,7 @@ sudregex --extract \
 ```
 ---
 
-#Quickstart (Python API)
+### Quickstart (Python API)
 ```bash
 import sudregex as sud
 
@@ -134,8 +134,7 @@ result = sud.extract(
 ```
 ---
 
-#Checklist usage 
-After installing the package, the default checklist and termslist are available using the below method. 
+The default checklist and termslist are available using the below method. 
 
 checklist = sud.checklist_abc
 checklist
