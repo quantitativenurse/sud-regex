@@ -1,10 +1,10 @@
 # sudregex/__init__.py
 import importlib.util
-from importlib.metadata import version, PackageNotFoundError
 import os
+from importlib.metadata import PackageNotFoundError, version
 
-from .checklist import checklist as checklist_abc
 from . import helper as _helper
+from .checklist import checklist as checklist_abc
 from .termslist import termslist as default_termslist
 from .validation import validate_checklist as validation
 

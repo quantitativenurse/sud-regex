@@ -35,12 +35,13 @@ cd sud-regex
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip
 pip install -e .[dev]   # installs sudregex + black, isort, flake8, pytest, etc.
+---
 
 ## Usage
 - For interactive usage on notebooks refer to our tutorial <link>
 
 
-#Quick Start (CLI)
+###Quick Start (CLI)
 sudregex --help
 Run extraction (CSV with commas) using the default pruning behavior:
 
@@ -91,6 +92,7 @@ sudregex --extract \
   --terms_active opioid_terms \
   --separator $'|^|'    # or any safe custom delimiter
 
+---
 
 #Quickstart (Python API)
 
@@ -127,6 +129,7 @@ result = sud.extract(
 )
 
 
+---
 
 #Checklist usage 
 After installing the package, the default checklist and termslist are available using the below method. 
@@ -136,6 +139,7 @@ checklist
 
 termslist = sud.default_termslist
 termslist 
+---
 
 ## License 
 MIT – see LICENSE for details.
@@ -148,3 +152,4 @@ Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.0). GitHub. https://gith
 
 **Acknowledgements:**  
 Thanks to all contributors and collaborators for feedback and testing.
+---
