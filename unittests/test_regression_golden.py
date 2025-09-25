@@ -1,13 +1,12 @@
 import csv
 import importlib.util as iu
 import io
-import re
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-import SUDRegex
+import sudregex
 
 _fc = Path(__file__).with_name("fail_checklist.py")
 spec = iu.spec_from_file_location("fail_checklist", _fc)
@@ -16,7 +15,7 @@ spec.loader.exec_module(_mod)
 checklist_override = getattr(_mod, "checklist")
 # make this true to use the override checklist and test failures
 USE_OVERRIDE = False
-CHECKLIST = checklist_override if USE_OVERRIDE else SUDRegex.checklist_abc
+CHECKLIST = checklist_override if USE_OVERRIDE else sudregex.checklist_abc
 
 REQUIRED_HEADERS = {"grid", "note_id", "note_text"}
 HEADER_SYNONYMS = {
@@ -111,11 +110,11 @@ def _postprocess_colorder(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _run_extract_df(df_notes: pd.DataFrame, terms: list, terms_active=None) -> pd.DataFrame:
-    out = SUDRegex.extract_df(
+    out = sudregex.extract_df(
         df=df_notes,
         checklist=CHECKLIST,
         terms=terms if terms else None,
-        termslist=SUDRegex.default_termslist if (terms_active and not terms) else None,
+        termslist=sudregex.default_termslist if (terms_active and not terms) else None,
         terms_active=terms_active,
         remove_linebreaks=True,
         id_column="note_id",
@@ -129,13 +128,13 @@ def _run_extract_df(df_notes: pd.DataFrame, terms: list, terms_active=None) -> p
 
 def _run_extract_file(notes_path: Path, sep_str: str, tmpdir: Path, terms: list, terms_active=None) -> pd.DataFrame:
     out_csv = tmpdir / "extract_out.csv"
-    SUDRegex.extract(
+    sudregex.extract(
         in_file=str(notes_path),
         out_file=str(out_csv),
         checklist=CHECKLIST,
         separator=sep_str,
         terms=terms if terms else None,
-        termslist=SUDRegex.default_termslist if (terms_active and not terms) else None,
+        termslist=sudregex.default_termslist if (terms_active and not terms) else None,
         terms_active=terms_active,
         parallel=False,
         include_note_text=False,

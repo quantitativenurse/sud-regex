@@ -2,7 +2,7 @@
 Helper file so that functions are stored separately from main execution file.
 """
 
-import os
+import os  # double check usage here for OS
 import re
 import sys
 from typing import List
@@ -159,7 +159,9 @@ def previews_batch(checklist, df_summarized, n_notes=2, span=300):
         sys.stdout = original_stdout
 
 
-def regex_extract(checklist, df_to_analyze, metadata, preview_count, expected_row_count):
+def regex_extract(
+    checklist, df_to_analyze, metadata, preview_count, expected_row_count, exclude_discharge_mentions: bool = True
+):
     """
     Applies the checklist of regex searches to the data frame, with optional substance and negation checks.
     """
@@ -285,10 +287,12 @@ def regex_extract(checklist, df_to_analyze, metadata, preview_count, expected_ro
 
             if should_prune and pre_sum > 0:
                 # Discharge instruction pruning (wide window)
-                df_searched = discharge_instructions(pat, df_searched, active_col, span=250)
-                post_discharge_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
-                if PRINT:
-                    print(f"[DEBUG]    • After discharge_instructions on {active_col}: {post_discharge_sum} kept")
+                if exclude_discharge_mentions:
+
+                    df_searched = discharge_instructions(pat, df_searched, active_col, span=250)
+                    post_discharge_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
+                    if PRINT:
+                        print(f"[DEBUG]    • After discharge_instructions on {active_col}: {post_discharge_sum} kept")
 
                 # Common false positive pruning if provided in checklist
                 common_fp = checklist[i].get("common_fp") or []
@@ -410,6 +414,7 @@ def regex_search_file(pat, new_col_name, df_to_search, metadata, preview=True):
     return df_searched
 
 
+# remove this function
 # possible name change for this functino to mask_no_tobacco_mentions
 def remove_tobacco_mentions(text):
     """Mask mentions of no tobacco use in the text."""
@@ -431,7 +436,7 @@ def check_for_substance(pat, col_name, col_name_substance, df_searched, span=100
 
     import pandas as pd
 
-    from SUDRegex.helper import TERMS_LIST
+    from .helper import TERMS_LIST
 
     # internal helper to iterate matches without mixing flags on compiled patterns
     def _iter_matches(pattern, text):

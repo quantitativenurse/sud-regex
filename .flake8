@@ -23,6 +23,6 @@ per-file-ignores =
     # Snapshot/legacy checklist with long lines
     ChecklistValidation/snapshotCheclist.py: E501
     # If you keep a generated checklist module
-    SUDRegex/checklist.py: E501,W604,W605
-    SUDRegex/helper.py: E501
+    sudregex/checklist.py: E501,W604,W605
+    sudregex/helper.py: E501
     testing/testscript.py : E501

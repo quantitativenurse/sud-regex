@@ -1,24 +1,22 @@
-# SUDRegex/__init__.py
-
-__version__ = "0.1.0"
-
+# sudregex/__init__.py
 import importlib.util
+from importlib.metadata import version, PackageNotFoundError
 import os
 
 from .checklist import checklist as checklist_abc
-from .helper import (
-    check_common_false_positives,
-    check_for_substance,
-    check_negation,
-    discharge_instructions,
-    preview_string_matches,
-    regex_extract,
-    remove_line_break,
-    remove_tobacco_mentions,
-    set_terms,
-)
+from . import helper as _helper
 from .termslist import termslist as default_termslist
 from .validation import validate_checklist as validation
+
+check_common_false_positives = _helper.check_common_false_positives
+check_for_substance = _helper.check_for_substance
+check_negation = _helper.check_negation
+discharge_instructions = _helper.discharge_instructions
+preview_string_matches = _helper.preview_string_matches
+regex_extract = _helper.regex_extract
+remove_line_break = _helper.remove_line_break
+remove_tobacco_mentions = _helper.remove_tobacco_mentions
+set_terms = _helper.set_terms
 
 __all__ = [
     "__version__",
@@ -37,6 +35,11 @@ __all__ = [
     "default_termslist",
     "validation",
 ]
+
+try:
+    __version__ = version("sudregex")
+except PackageNotFoundError:
+    __version__ = "0.0.dev"
 
 
 def _import_python_object(file_path, varname):
@@ -70,6 +73,8 @@ def extract(
     keep_columns=None,
     debug: bool = False,
     has_header: bool = True,
+    n_workers: int | None = None,  # <--- NEW
+    exclude_discharge_mentions: bool = True,  # <--- NEW (default keeps current behavior)
 ):
     """
     Run regex extraction and save to CSV.
@@ -78,7 +83,7 @@ def extract(
 
     import pandas as pd
 
-    import SUDRegex.helper as hlp
+    hlp = _helper
 
     hlp.PRINT = debug
 
@@ -122,10 +127,17 @@ def extract(
         try:
             from pandarallel import pandarallel
 
-            pandarallel.initialize(progress_bar=False)
+            if n_workers is not None:
+                if not isinstance(n_workers, int) or n_workers <= 0:
+                    raise ValueError("n_workers must be a positive integer")
+                pandarallel.initialize(progress_bar=False, nb_workers=n_workers)
+            else:
+                pandarallel.initialize(progress_bar=False)
             use_parallel = True
         except ImportError:
-            pass
+            if debug:
+                print("pandarallel not installed; falling back to single-core .apply()")
+            use_parallel = False
 
     # ---- build read_csv kwargs based on header presence ----
     read_kwargs = dict(
@@ -212,6 +224,7 @@ def extract(
             metadata=meta,
             preview_count=0,
             expected_row_count=EXPECTED,
+            exclude_discharge_mentions=exclude_discharge_mentions,  # <--- NEW
         )
 
         # ensure consistent dtype on merge key
@@ -252,18 +265,21 @@ def extract_df(
     id_column="note_id",
     grid_column=None,
     include_note_text: bool = False,
+    n_workers: int | None = None,  # <--- NEW
+    exclude_discharge_mentions: bool = True,  # <--- NEW (default keeps current behavior)
 ):
     import pandas as pd
 
-    import SUDRegex.helper as hlp
+    import sudregex.helper as hlp
 
     hlp.PRINT = debug
 
+    # --- resolve checklist ---
     checklist_obj = _import_python_object(checklist, "checklist") if isinstance(checklist, str) else checklist
     if keys:
         checklist_obj = {k: checklist_obj[k] for k in keys if k in checklist_obj}
 
-    # --- terms (unchanged) ---
+    # --- build terms list ---
     terms_list = []
     if termslist and terms_active:
         groups = [g.strip() for g in terms_active.split(",")] if isinstance(terms_active, str) else list(terms_active)
@@ -302,23 +318,44 @@ def extract_df(
         work[c] = work[c].astype("string")
     work.dropna(subset=[note_column] + ([id_column] if id_column else []), inplace=True)
 
-    # --- crosswalk BEFORE extraction (key step) ---
+    # If a grid is requested, require an id to reattach cleanly
+    if grid_column and not id_column:
+        raise ValueError("grid_column requires id_column to be set for crosswalk reattachment.")
+
+    # --- crosswalk BEFORE extraction ---
     crosswalk = None
     if grid_column:
         crosswalk = work[[id_column, grid_column]].drop_duplicates(id_column).copy()
 
-    # --- process text ALWAYS ---
-    if remove_linebreaks:
+    # --- optional parallel init (single place) ---
+    use_parallel = False
+    if parallel:
         try:
-            if parallel:
-                from pandarallel import pandarallel
+            from pandarallel import pandarallel  # type: ignore
 
-                pandarallel.initialize(progress_bar=False)
-                work[note_column] = work[note_column].parallel_apply(hlp.remove_line_break)
+            if n_workers is not None:
+                if not isinstance(n_workers, int) or n_workers <= 0:
+                    raise ValueError("n_workers must be a positive integer")
+                pandarallel.initialize(progress_bar=False, nb_workers=n_workers)
             else:
-                work[note_column] = work[note_column].apply(hlp.remove_line_break)
+                pandarallel.initialize(progress_bar=False)
+            use_parallel = True
         except ImportError:
-            work[note_column] = work[note_column].apply(hlp.remove_line_break)
+            if debug:
+                print("pandarallel not installed; falling back to .apply()")
+            use_parallel = False
+
+    # helper to apply a per-row function with optional parallelization
+    def _apply(series, func):
+        if use_parallel:
+            par = getattr(series, "parallel_apply", None)
+            if par is not None:
+                return par(func)
+        return series.apply(func)
+
+    # --- text preprocessing ---
+    if remove_linebreaks:
+        work[note_column] = _apply(work[note_column], hlp.remove_line_break)
 
     # --- group by note_id like extract() ---
     if id_column:
@@ -330,7 +367,7 @@ def extract_df(
     meta = (
         grouped[[id_column]].copy() if id_column and id_column in grouped.columns else pd.DataFrame(index=grouped.index)
     )
-    if id_column in meta.columns:
+    if id_column and id_column in meta.columns:
         meta[id_column] = meta[id_column].astype("string")
 
     # --- single pass extraction ---
@@ -340,9 +377,10 @@ def extract_df(
         metadata=meta,
         preview_count=0,
         expected_row_count=EXPECTED,
+        exclude_discharge_mentions=exclude_discharge_mentions,
     )
 
-    # --- reattach GRID AFTER extraction (fix) ---
+    # --- reattach GRID AFTER extraction ---
     if crosswalk is not None and id_column in res.columns:
         res[id_column] = res[id_column].astype("string")
         res = res.merge(crosswalk, on=id_column, how="left")

@@ -1,11 +1,8 @@
-import os
 import re
-import tempfile
 
 import pandas as pd
-import pytest
 
-from SUDRegex import helper
+from sudregex import helper
 
 
 def test_remove_line_break_simple():

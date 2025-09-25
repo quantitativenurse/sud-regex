@@ -6,13 +6,13 @@ import tempfile
 import pandas as pd
 import pytest
 
-import SUDRegex
+import sudregex
 
 
 def test_version_and_all():
-    assert isinstance(SUDRegex.__version__, str)
+    assert isinstance(sudregex.__version__, str)
     for name in ["extract_df", "remove_line_break", "check_for_substance"]:
-        assert name in SUDRegex.__all__
+        assert name in sudregex.__all__
 
 
 def test_import_python_object(tmp_path):
@@ -20,10 +20,10 @@ def test_import_python_object(tmp_path):
     mod_file = tmp_path / "mymod.py"
     mod_file.write_text("x = 123\ny = 'hello'")
     # import x
-    x = SUDRegex._import_python_object(str(mod_file), "x")
-    y = SUDRegex._import_python_object(str(mod_file), "y")
+    x = sudregex._import_python_object(str(mod_file), "x")
+    y = sudregex._import_python_object(str(mod_file), "y")
     # import whole module
-    mod = SUDRegex._import_python_object(str(mod_file), None)
+    mod = sudregex._import_python_object(str(mod_file), None)
     assert x == 123
     assert y == "hello"
     assert hasattr(mod, "x") and hasattr(mod, "y")
@@ -42,7 +42,7 @@ def test_extract_df_basic(tmp_path):
             "preview": False,
         }
     }
-    out = SUDRegex.extract_df(
+    out = sudregex.extract_df(
         df,
         checklist,
         terms=["irrelevant"],

@@ -1,4 +1,4 @@
-# SUDRegex/validation.py
+# sudregex/validation.py
 from __future__ import annotations
 
 import importlib.util

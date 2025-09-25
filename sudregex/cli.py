@@ -4,15 +4,13 @@ import argparse
 import sys
 import traceback
 
-from SUDRegex import __version__, extract, helper
-from SUDRegex.validation import import_python_object  # loads `checklist` dict from a .py file
-from SUDRegex.validation import parse_text  # parses your examples file (pipe or !^! formats)
-from SUDRegex.validation import validate_rows  # runs the pure-regex validation
+from . import __version__, extract, helper  # fixed: import extract from package root
+from .validation import import_python_object, parse_text, validate_rows
 
 
 def main():
     parser = argparse.ArgumentParser(prog="sudregex")
-    parser.add_argument("-v", "--version", action="version", version=f"SUDRegex {__version__}")
+    parser.add_argument("-v", "--version", action="version", version=f"sudregex {__version__}")
 
     # Mutually exclusive modes
     mode = parser.add_mutually_exclusive_group()
@@ -33,7 +31,38 @@ def main():
     parser.add_argument("--termslist", type=str, help="Path to Python file with term lists")
     parser.add_argument("--terms_active", type=str, help="Comma-separated group names in --termslist to use")
     parser.add_argument("--parallel", action="store_true", help="Enable parallel processing")
+    parser.add_argument("--n-workers", type=int, default=None, help="Number of workers for pandarallel (optional)")
     parser.add_argument("--include_note_text", action="store_true", help="Include note text in output CSV")
+    # new: control discharge-instruction pruning (default True to preserve current behavior)
+    try:
+        # Python 3.9+ has BooleanOptionalAction
+        BoolAction = argparse.BooleanOptionalAction  # type: ignore[attr-defined]
+    except Exception:
+        BoolAction = None
+    if BoolAction:
+        parser.add_argument(
+            "--exclude-discharge-mentions",
+            action=BoolAction,
+            default=True,
+            help="Prune matches in discharge-instruction contexts (use --no-exclude-discharge-mentions to disable)",
+        )
+    else:
+        # Fallback for older argparse: provide both flags
+        excl_group = parser.add_mutually_exclusive_group()
+        excl_group.add_argument(
+            "--exclude-discharge-mentions",
+            dest="exclude_discharge_mentions",
+            action="store_true",
+            default=True,
+            help="Prune matches in discharge-instruction contexts (default)",
+        )
+        excl_group.add_argument(
+            "--no-exclude-discharge-mentions",
+            dest="exclude_discharge_mentions",
+            action="store_false",
+            help="Do NOT prune matches in discharge-instruction contexts",
+        )
+
     parser.add_argument("--results_path", help="(reserved) Directory or file for aggregation/scoring")
     parser.add_argument("--output_path", help="(reserved) Path to save aggregate_score output CSV")
     parser.add_argument("--plot_stats", action="store_true", help="(reserved) Plot stats and save image")
@@ -68,22 +97,29 @@ def main():
 
     try:
         if args.extract:
+            # Required args check
             if not args.in_file or not args.out_file or not args.checklist:
                 print("[ERROR] --in_file, --out_file, and --checklist are required for --extract.")
                 sys.exit(1)
+
+            # Prepare terms list if provided
+            terms_list = args.terms.split(",") if args.terms else None
 
             extract(
                 in_file=args.in_file,
                 out_file=args.out_file,
                 checklist=args.checklist,
-                separator=args.separator,
-                terms=args.terms.split(",") if args.terms else None,
+                separator=args.separator or "",
+                terms=terms_list,
                 termslist=args.termslist,
                 terms_active=args.terms_active,
                 parallel=args.parallel,
+                n_workers=args.n_workers,
                 include_note_text=args.include_note_text,
                 nrows=args.nrows,
                 chunk_size=args.chunk_size,
+                # new flag passed through:
+                exclude_discharge_mentions=getattr(args, "exclude_discharge_mentions", True),
             )
             return
 

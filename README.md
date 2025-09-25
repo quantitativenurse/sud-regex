@@ -1,7 +1,7 @@
 [![CI](https://github.com/quantitativenurse/sud-regex/actions/workflows/lint.yml/badge.svg)](https://github.com/quantitativenurse/sud-regex/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-# SUDRegex
+# sudregex
 
 > **Version:** 0.1.0
 
@@ -21,6 +21,7 @@ A lightweight, high-throughput pipeline for regex-driven extraction with negatio
 
 ---
 
+
 ## 📦 Installation
 
 ```bash
@@ -33,84 +34,117 @@ git clone https://github.com/quantitativenurse/sud-regex.git
 cd sud-regex
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip
-pip install -e .[dev]   # installs SUDRegex + black, isort, flake8, pytest, etc.
+pip install -e .[dev]   # installs sudregex + black, isort, flake8, pytest, etc.
+
+## Usage
+- For interactive usage on notebooks refer to our tutorial <link>
 
 
-import pandas as pd
-import SUDRegex as sud
-from SUDRegex import checklist_abc, default_termslist
+#Quick Start (CLI)
+sudregex --help
+Run extraction (CSV with commas) using the default pruning behavior:
 
-# 1) Your DataFrame needs at least: note_id, note_text
-df = pd.read_csv("notes.csv", dtype=str)
-
-# 2) Run extraction using built-in checklist and term groups
-out_df = sud.extract_df(
-    df=df,
-    checklist=checklist_abc,
-    termslist=default_termslist,
-    terms_active="opioid_terms",  # which term groups to activate
-    note_column="note_text",
-    id_column="note_id",
-    grid_column=None,            # include if you have a stratification column
-    remove_linebreaks=True,     # already normalized above
-    parallel=False,
-    debug=False,
-    include_note_text=False
-)
-
-print(out_df.head())
-
-
-## CLI 
-
-# Help
-python -m SUDRegex.cli --help
-
-python -m SUDRegex.cli \
-  --extract \
+sudregex --extract \
   --in_file path/to/notes.csv \
   --out_file path/to/results.csv \
   --checklist path/to/checklist.py \
   --termslist path/to/termslist.py \
   --terms_active alcohol_terms,opioid_terms \
   --separator , \
-  --include_note_text \
-  --parallel
+  --parallel --n-workers 2
 
-## Validate checklist 
+### Discharge-instruction pruning
 
-source_dir = "/path"
+By default, sudregex **excludes** matches that occur in discharge-instruction contexts.
 
-notes_input format --> item_key | expected match| actual match | free text
-detailed, by_item = sud.validation(
-    checklist=f"{source_dir}/snapshotCheclist.py",
-    examples=f"{source_dir}/notes_input.txt",
-    out_csv=f"{source_dir}/package_validation_result.csv",
-    by_item_csv=f"{source_dir}/package_checklist_validation_by_item.csv",
+- **Default:** no flag needed, or explicit:
+  ```bash
+  sudregex --extract ... --exclude-discharge-mentions
+
+Turn pruning OFF (keep discharge-context hits):
+
+sudregex --extract \
+  --in_file path/to/notes.csv \
+  --out_file path/to/results_raw.csv \
+  --checklist path/to/checklist.py \
+  --termslist path/to/termslist.py \
+  --terms_active alcohol_terms \
+  --no-exclude-discharge-mentions
+
+### Use a custom separator (example: a unique token unlikely to appear in notes):
+
+Clinical notes often contain commas, semicolons, tabs and other common punctuation marks as part of natural language. Using these as delimiters can lead to unintended splits and parsing errors, especially when extracting structured information from note text fields.
+In our work, we use the custom marker |^| because:
+
+  It is highly unlikely to appear naturally in clinical documentation.
+  It provides a clear, unambiguous boundary between segments.
+  It avoids conflicts with commonly used punctuation, improving extraction accuracy.
+  It simplifies line-break normalization and downstream processing.
+
+This choice ensures that our pipeline remains robust across diverse note formats.
+
+sudregex --extract \
+  --in_file path/to/notes.txt \
+  --out_file path/to/results.csv \
+  --checklist path/to/checklist.py \
+  --termslist path/to/termslist.py \
+  --terms_active opioid_terms \
+  --separator $'|^|'    # or any safe custom delimiter
+
+
+#Quickstart (Python API)
+
+import sudregex as sud
+
+# Use the packaged defaults if desired
+checklist = sud.checklist_abc
+terms = sud.default_termslist
+
+# DataFrame API
+df_results = sud.extract_df(
+    df=my_notes_df,                  # columns: note_id, note_text (and optional grid)
+    checklist=checklist,
+    termslist=terms,
+    terms_active="alcohol_terms,opioid_terms",
+    parallel=True,                   # <— enable parallel apply (if pandarallel is installed)
+    n_workers=2,                     
+    include_note_text=False,
+    exclude_discharge_mentions=True, # default True; set False to disable pruning
 )
 
-detailed
+# File API (CSV/TSV/…)
+result = sud.extract(
+    in_file="notes.csv",
+    out_file="results.csv",
+    checklist="path/to/checklist.py",
+    separator=",",
+    termslist="path/to/termslist.py",
+    terms_active="opioid_terms",
+    parallel=True,
+    n_workers=2,                      
+    include_note_text=False,
+    exclude_discharge_mentions=False, # keep raw matches even in discharge contexts
+)
 
 
-## Checklist format
 
-checklist = {
-  "my_item": {
-    "lab":       "Human-readable label",
-    "pat":       r"(your|regex|here)",   # str or compiled re.Pattern
-    "col_name":  "my_item",
-    "negation":  True,                   # run negation filtering
-    "substance": False,                  # enable context vocabulary window
-    "preview":   False,                  # print text previews (for debugging)
-    "common_fp": ["family", "history"]   # optional false-positive contexts
-  },
-  # ...
-}
+#Checklist usage 
+After installing the package, the default checklist and termslist are available using the below method. 
+
+checklist = sud.checklist_abc
+checklist
+
+termslist = sud.default_termslist
+termslist 
 
 ## License 
 MIT – see LICENSE for details.
 
-##📣 Citation / Acknowledgements
+## 📣 Citation / Acknowledgements
 
-If SUDRegex is useful in your work, please cite the repository and the version used.
-Thanks to the team for all contributions. 
+If **sudregex** is useful in your work, please cite:
+
+Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.0). GitHub. https://github.com/quantitativenurse/sud-regex
+
+**Acknowledgements:**  
+Thanks to all contributors and collaborators for feedback and testing.

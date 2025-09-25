@@ -2,7 +2,7 @@
 import re
 from copy import deepcopy
 
-from SUDRegex import checklist_abc as base
+from sudregex import checklist_abc as base
 
 # Start from the real checklist so we keep exactly the same format/keys.
 checklist = deepcopy(base)
