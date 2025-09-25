@@ -31,8 +31,9 @@ def main():
     parser.add_argument("--termslist", type=str, help="Path to Python file with term lists")
     parser.add_argument("--terms_active", type=str, help="Comma-separated group names in --termslist to use")
     parser.add_argument("--parallel", action="store_true", help="Enable parallel processing")
-    parser.add_argument("--n-workers", dest="n_workers", type=int, default=None,
-                        help="Number of workers for pandarallel (optional)")
+    parser.add_argument(
+        "--n-workers", dest="n_workers", type=int, default=None, help="Number of workers for pandarallel (optional)"
+    )
     parser.add_argument("--include_note_text", action="store_true", help="Include note text in output CSV")
 
     # --- Discharge-mentions policy (default: EXCLUDE) ---

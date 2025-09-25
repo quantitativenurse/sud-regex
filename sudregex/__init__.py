@@ -74,7 +74,7 @@ def extract(
     debug: bool = False,
     has_header: bool = True,
     n_workers: int | None = None,  # <--- NEW
-    exclude_discharge_mentions: bool = True,   # ← NEW
+    exclude_discharge_mentions: bool = True,  # ← NEW
 ):
     """
     Run regex extraction and save to CSV.
