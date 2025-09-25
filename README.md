@@ -3,7 +3,7 @@
 
 # sudregex
 
-> **Version:** 0.1.1
+> **Version:** 0.1.2
 
 A lightweight, high-throughput pipeline for regex-driven extraction with negation and false-positive pruning—built for Substance Use Disorder (SUD) research, but flexible enough for general clinical text mining.
 
@@ -153,10 +153,11 @@ MIT – see LICENSE for details.
 
 If **sudregex** is useful in your work, please cite:
 
-> Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.1). GitHub. https://github.com/quantitativenurse/sud-regex
+> Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.2). GitHub. https://github.com/quantitativenurse/sud-regex
 
 **Acknowledgements**
-- National Institute on Drug Abuse (NIDA): “Framework to Accelerate Substance Use Disorder Genetic Studies through Customizable, EHR-Based Precision Phenotyping.”
+This was work was supported, in part, by the National Institute on Drug Abuse under award number DP1DA056667. The content is solely the responsibility of the authors and does not necessarily represent the official views of the US government or the National Institutes of Health.
+
 
 - Thanks to all contributors and collaborators for feedback and testing.
 ---
