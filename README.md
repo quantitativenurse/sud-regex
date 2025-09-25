@@ -36,12 +36,14 @@ python -m venv .venv && source .venv/bin/activate
 pip install -U pip
 pip install -e .[dev]   # installs sudregex + black, isort, flake8, pytest, etc.
 ---
+```
 
 ## Usage
 - For interactive usage on notebooks refer to our tutorial <link>
 
 
 ###Quick Start (CLI)
+```bash
 sudregex --help
 Run extraction (CSV with commas) using the default pruning behavior:
 
@@ -53,13 +55,13 @@ sudregex --extract \
   --terms_active alcohol_terms,opioid_terms \
   --separator , \
   --parallel --n-workers 2
-
+```
 ### Discharge-instruction pruning
 
 By default, sudregex **excludes** matches that occur in discharge-instruction contexts.
 
 - **Default:** no flag needed, or explicit:
-  ```bash
+```bash
   sudregex --extract ... --exclude-discharge-mentions
 
 Turn pruning OFF (keep discharge-context hits):
@@ -71,6 +73,7 @@ sudregex --extract \
   --termslist path/to/termslist.py \
   --terms_active alcohol_terms \
   --no-exclude-discharge-mentions
+```
 
 ### Use a custom separator (example: a unique token unlikely to appear in notes):
 
@@ -83,7 +86,7 @@ In our work, we use the custom marker |^| because:
   It simplifies line-break normalization and downstream processing.
 
 This choice ensures that our pipeline remains robust across diverse note formats.
-
+```bash
 sudregex --extract \
   --in_file path/to/notes.txt \
   --out_file path/to/results.csv \
@@ -91,11 +94,11 @@ sudregex --extract \
   --termslist path/to/termslist.py \
   --terms_active opioid_terms \
   --separator $'|^|'    # or any safe custom delimiter
-
+```
 ---
 
 #Quickstart (Python API)
-
+```bash
 import sudregex as sud
 
 # Use the packaged defaults if desired
@@ -128,7 +131,7 @@ result = sud.extract(
     exclude_discharge_mentions=False, # keep raw matches even in discharge contexts
 )
 
-
+```
 ---
 
 #Checklist usage 
