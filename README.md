@@ -3,7 +3,7 @@
 
 # sudregex
 
-> **Version:** 0.1.0
+> **Version:** 0.1.1
 
 A lightweight, high-throughput pipeline for regex-driven extraction with negation and false-positive pruning—built for Substance Use Disorder (SUD) research, but flexible enough for general clinical text mining.
 
@@ -25,7 +25,7 @@ A lightweight, high-throughput pipeline for regex-driven extraction with negatio
 ## 📦 Installation
 
 ```bash
-# From PyPI (enable after publish)
+# From PyPI
 pip install sud-regex
 
 
@@ -64,7 +64,7 @@ By default, sudregex **excludes** matches that occur in discharge-instruction co
 ```bash
   sudregex --extract ... --exclude-discharge-mentions
 
-Turn pruning OFF (keep discharge-context hits):
+To keep discharge-context hits:
 
 sudregex --extract \
   --in_file path/to/notes.csv \
@@ -72,7 +72,7 @@ sudregex --extract \
   --checklist path/to/checklist.py \
   --termslist path/to/termslist.py \
   --terms_active alcohol_terms \
-  --no-exclude-discharge-mentions
+  --include-discharge-mention
 ```
 
 ### Use a custom separator (example: a unique token unlikely to appear in notes):
@@ -153,8 +153,10 @@ MIT – see LICENSE for details.
 
 If **sudregex** is useful in your work, please cite:
 
-Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.0). GitHub. https://github.com/quantitativenurse/sud-regex
+> Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.1). GitHub. https://github.com/quantitativenurse/sud-regex
 
-**Acknowledgements:**  
-Thanks to all contributors and collaborators for feedback and testing.
+**Acknowledgements**
+- National Institute on Drug Abuse (NIDA): “Framework to Accelerate Substance Use Disorder Genetic Studies through Customizable, EHR-Based Precision Phenotyping.”
+
+- Thanks to all contributors and collaborators for feedback and testing.
 ---

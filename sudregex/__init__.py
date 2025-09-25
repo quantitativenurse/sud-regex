@@ -74,7 +74,7 @@ def extract(
     debug: bool = False,
     has_header: bool = True,
     n_workers: int | None = None,  # <--- NEW
-    exclude_discharge_mentions: bool = True,  # <--- NEW (default keeps current behavior)
+    exclude_discharge_mentions: bool = True,   # ← NEW
 ):
     """
     Run regex extraction and save to CSV.
@@ -224,7 +224,7 @@ def extract(
             metadata=meta,
             preview_count=0,
             expected_row_count=EXPECTED,
-            exclude_discharge_mentions=exclude_discharge_mentions,  # <--- NEW
+            exclude_discharge_mentions=exclude_discharge_mentions,  # ← NEW
         )
 
         # ensure consistent dtype on merge key

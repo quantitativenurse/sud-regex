@@ -4,7 +4,7 @@ import argparse
 import sys
 import traceback
 
-from . import __version__, extract, helper  # fixed: import extract from package root
+from . import __version__, extract, helper  # import extract from package root
 from .validation import import_python_object, parse_text, validate_rows
 
 
@@ -31,41 +31,33 @@ def main():
     parser.add_argument("--termslist", type=str, help="Path to Python file with term lists")
     parser.add_argument("--terms_active", type=str, help="Comma-separated group names in --termslist to use")
     parser.add_argument("--parallel", action="store_true", help="Enable parallel processing")
-    parser.add_argument("--n-workers", type=int, default=None, help="Number of workers for pandarallel (optional)")
+    parser.add_argument("--n-workers", dest="n_workers", type=int, default=None,
+                        help="Number of workers for pandarallel (optional)")
     parser.add_argument("--include_note_text", action="store_true", help="Include note text in output CSV")
-    # new: control discharge-instruction pruning (default True to preserve current behavior)
-    try:
-        # Python 3.9+ has BooleanOptionalAction
-        BoolAction = argparse.BooleanOptionalAction  # type: ignore[attr-defined]
-    except Exception:
-        BoolAction = None
-    if BoolAction:
-        parser.add_argument(
-            "--exclude-discharge-mentions",
-            action=BoolAction,
-            default=True,
-            help="Prune matches in discharge-instruction contexts (use --no-exclude-discharge-mentions to disable)",
-        )
-    else:
-        # Fallback for older argparse: provide both flags
-        excl_group = parser.add_mutually_exclusive_group()
-        excl_group.add_argument(
-            "--exclude-discharge-mentions",
-            dest="exclude_discharge_mentions",
-            action="store_true",
-            default=True,
-            help="Prune matches in discharge-instruction contexts (default)",
-        )
-        excl_group.add_argument(
-            "--no-exclude-discharge-mentions",
-            dest="exclude_discharge_mentions",
-            action="store_false",
-            help="Do NOT prune matches in discharge-instruction contexts",
-        )
 
-    parser.add_argument("--results_path", help="(reserved) Directory or file for aggregation/scoring")
-    parser.add_argument("--output_path", help="(reserved) Path to save aggregate_score output CSV")
-    parser.add_argument("--plot_stats", action="store_true", help="(reserved) Plot stats and save image")
+    # --- Discharge-mentions policy (default: EXCLUDE) ---
+    dis = parser.add_mutually_exclusive_group()
+    dis.add_argument(
+        "--include-discharge-mentions",
+        dest="exclude_discharge_mentions",
+        action="store_false",
+        help="Include matches even if they occur in discharge-instruction contexts.",
+    )
+    dis.add_argument(
+        "--exclude-discharge-mentions",
+        dest="exclude_discharge_mentions",
+        action="store_true",
+        help="Exclude matches that occur in discharge-instruction contexts (default).",
+    )
+    # Back-compat with older docs; hidden in help:
+    parser.add_argument(
+        "--no-exclude-discharge-mentions",
+        dest="exclude_discharge_mentions",
+        action="store_false",
+        help=argparse.SUPPRESS,
+    )
+    # Ensure the default really is 'exclude'
+    parser.set_defaults(exclude_discharge_mentions=True)
 
     # -------- Validate args --------
     parser.add_argument(
@@ -118,8 +110,9 @@ def main():
                 include_note_text=args.include_note_text,
                 nrows=args.nrows,
                 chunk_size=args.chunk_size,
-                # new flag passed through:
-                exclude_discharge_mentions=getattr(args, "exclude_discharge_mentions", True),
+                debug=args.debug,  # ← pass through so extract doesn't overwrite helper.PRINT
+                # discharge mentions policy:
+                exclude_discharge_mentions=args.exclude_discharge_mentions,
             )
             return
 
