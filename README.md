@@ -39,7 +39,7 @@ pip install -e .[dev]   # installs sudregex + black, isort, flake8, pytest, etc.
 ```
 
 ## Usage
-- For interactive usage on notebooks refer to our tutorial <link>
+- For interactive usage on notebooks refer to our tutorial <https://github.com/quantitativenurse/sud-regex/blob/main/notebook_tutorial.ipynb>
 
 ### Quick Start (CLI)
 
