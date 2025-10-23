@@ -2,12 +2,16 @@
 import importlib.util
 import os
 from importlib.metadata import PackageNotFoundError, version
+from typing import Optional, Tuple, Union
+
+import pandas as pd
 
 from . import helper as _helper
 from .checklist import checklist as checklist_abc
 from .termslist import termslist as default_termslist
 from .validation import validate_checklist as validation
 
+# re-export useful helper functions
 check_common_false_positives = _helper.check_common_false_positives
 check_for_substance = _helper.check_for_substance
 check_negation = _helper.check_negation
@@ -17,6 +21,8 @@ regex_extract = _helper.regex_extract
 remove_line_break = _helper.remove_line_break
 remove_tobacco_mentions = _helper.remove_tobacco_mentions
 set_terms = _helper.set_terms
+previews_batch = _helper.previews_batch  # exposed for callers (legacy/base-only)
+write_previews_for_item = _helper.write_previews_for_item
 
 __all__ = [
     "__version__",
@@ -31,9 +37,11 @@ __all__ = [
     "check_common_false_positives",
     "discharge_instructions",
     "preview_string_matches",
+    "previews_batch",
     "checklist_abc",
     "default_termslist",
     "validation",
+    "write_previews_for_item",
 ]
 
 try:
@@ -73,18 +81,33 @@ def extract(
     keep_columns=None,
     debug: bool = False,
     has_header: bool = True,
-    n_workers: int | None = None,  # <--- NEW
-    exclude_discharge_mentions: bool = True,  # ← NEW
+    n_workers: Optional[int] = None,  # optional pandarallel worker count
+    exclude_discharge_mentions: bool = True,  # keep current behavior by default
+    # --- preview controls ---
+    preview_count: int = 0,  # 0 = off
+    preview_span: int = 120,
+    preview_file: Optional[str] = None,  # text file (human-readable)
+    preview_csv: Optional[str] = None,  # CSV path for previews
+    # --- negation scope ---
+    negation_scope: str = "left",  # "left" (default), "right", or "both"
 ):
     """
     Run regex extraction and save to CSV.
+
+    If `preview_count` > 0, gated snippet previews for items with `preview: True` are written by helper.regex_extract:
+      - to `preview_file` (human-readable text) if provided,
+      - to `preview_csv` (tabular) if provided.
+
+    `negation_scope` controls where negation cues are scanned relative to a hit:
+      - "left" (default/back-compatible): only the left side
+      - "right": only the right side
+      - "both": symmetric window on both sides
     """
     import time
 
     import pandas as pd
 
     hlp = _helper
-
     hlp.PRINT = debug
 
     # -- load the checklist object --
@@ -199,7 +222,6 @@ def extract(
                 chunk[note_column] = chunk[note_column].apply(hlp.remove_line_break)
 
         # group texts by note_id
-        # ensure id is string before grouping
         chunk[id_column] = chunk[id_column].astype("string")
         grouped = chunk.groupby([id_column])[note_column].apply(" ".join).reset_index()
         grouped[id_column] = grouped[id_column].astype("string")
@@ -217,14 +239,18 @@ def extract(
         # chunked filename
         out_fname = out_file if chunk_size == 1 else out_file.replace(".csv", f"_part_{part}.csv")
 
-        # do the regex extraction
+        # do the regex extraction + gated previews (helper handles previews)
         result = hlp.regex_extract(
             checklist=checklist_obj,
             df_to_analyze=grouped,
             metadata=meta,
-            preview_count=0,
+            preview_count=preview_count,  # pass through
             expected_row_count=EXPECTED,
-            exclude_discharge_mentions=exclude_discharge_mentions,  # ← NEW
+            exclude_discharge_mentions=exclude_discharge_mentions,
+            preview_span=preview_span,  # pass through
+            preview_csv=preview_csv,  # pass through
+            preview_file=preview_file or "note_previews.txt",  # pass through
+            negation_scope=negation_scope,  # ← NEW
         )
 
         # ensure consistent dtype on merge key
@@ -265,9 +291,18 @@ def extract_df(
     id_column="note_id",
     grid_column=None,
     include_note_text: bool = False,
-    n_workers: int | None = None,  # <--- NEW
-    exclude_discharge_mentions: bool = True,  # <--- NEW (default keeps current behavior)
-):
+    n_workers: Optional[int] = None,  # optional pandarallel worker count
+    exclude_discharge_mentions: bool = True,  # default keeps current behavior
+    # --- preview controls for in-memory path ---
+    preview_count: int = 0,  # 0 = off
+    preview_span: int = 120,
+    preview_file: Optional[str] = None,  # text previews
+    preview_csv: Optional[str] = None,  # CSV path for previews
+    # --- negation scope ---
+    negation_scope: str = "left",  # "left" (default), "right", or "both"
+    # --- NEW: return previews to the caller as a DataFrame ---
+    return_previews_df: bool = False,
+) -> Union["pd.DataFrame", Tuple["pd.DataFrame", "pd.DataFrame"]]:
     import pandas as pd
 
     import sudregex.helper as hlp
@@ -370,23 +405,52 @@ def extract_df(
     if id_column and id_column in meta.columns:
         meta[id_column] = meta[id_column].astype("string")
 
-    # --- single pass extraction ---
-    res = hlp.regex_extract(
-        checklist=checklist_obj,
-        df_to_analyze=grouped,
-        metadata=meta,
-        preview_count=0,
-        expected_row_count=EXPECTED,
-        exclude_discharge_mentions=exclude_discharge_mentions,
-    )
+    # --- single pass extraction + gated previews handled inside helper ---
+    if return_previews_df:
+        res, previews_df = hlp.regex_extract(
+            checklist=checklist_obj,
+            df_to_analyze=grouped,
+            metadata=meta,
+            preview_count=preview_count,  # pass through
+            expected_row_count=EXPECTED,
+            exclude_discharge_mentions=exclude_discharge_mentions,
+            preview_span=preview_span,  # pass through
+            preview_csv=preview_csv,  # pass through
+            preview_file=preview_file or "note_previews.txt",  # pass through
+            negation_scope=negation_scope,  # ← NEW
+            return_previews=True,  # ← capture previews from helper
+        )
+    else:
+        res = hlp.regex_extract(
+            checklist=checklist_obj,
+            df_to_analyze=grouped,
+            metadata=meta,
+            preview_count=preview_count,  # pass through
+            expected_row_count=EXPECTED,
+            exclude_discharge_mentions=exclude_discharge_mentions,
+            preview_span=preview_span,  # pass through
+            preview_csv=preview_csv,  # pass through
+            preview_file=preview_file or "note_previews.txt",  # pass through
+            negation_scope=negation_scope,  # ← NEW
+        )
 
     # --- reattach GRID AFTER extraction ---
-    if crosswalk is not None and id_column in res.columns:
+    if grid_column is not None and id_column in res.columns:
         res[id_column] = res[id_column].astype("string")
         res = res.merge(crosswalk, on=id_column, how="left")
+
+    # Also attach grid to previews_df (if requested) for convenience in notebooks
+    if return_previews_df:
+        if "note_id" in previews_df.columns:
+            previews_df["note_id"] = previews_df["note_id"].astype("string")
+            if grid_column is not None:
+                previews_df = previews_df.merge(crosswalk, left_on="note_id", right_on=id_column, how="left")
+                if id_column != "note_id":
+                    # drop duplicated merge key if different names
+                    previews_df.drop(columns=[id_column], inplace=True, errors="ignore")
 
     # --- drop note text only for RETURN ---
     if not include_note_text and note_column in res.columns:
         res.drop(columns=[note_column], inplace=True)
 
-    return res
+    return (res, previews_df) if return_previews_df else res

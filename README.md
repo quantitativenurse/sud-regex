@@ -3,7 +3,7 @@
 
 # sudregex
 
-> **Version:** 0.1.2
+> **Version:** 0.2.0
 
 A lightweight, high-throughput pipeline for regex-driven extraction with negation and false-positive pruning—built for Substance Use Disorder (SUD) research, but flexible enough for general clinical text mining.
 
@@ -11,14 +11,14 @@ A lightweight, high-throughput pipeline for regex-driven extraction with negatio
 
 ## ✨ Features
 
-- **Negation detection** – Filter matches when preceded by cues (e.g., “no”, “denies”, “not”).  
-- **False-positive ** – Drop matches in noisy contexts (e.g., **discharge instructions**, **family history**).  
-- **Substance context window** – Confirm that matches occur near a user-supplied vocabulary (e.g., opioid, alcohol terms).  
-- **Line-break normalization** – Remove literal markers (default `"$+$"`) and collapse whitespace.  
-- **Batteries included** – A ready-to-use “ABC” checklist for common SUD signals.  
-- **CLI & Python API** – Use from shell scripts or notebooks.  
-- **Deterministic previews** – Sampling uses a fixed seed for reproducible tests.
-
+- **Unified gating utilities** – Substance context (“opioid/alcohol/etc.”), negation, common false-positive pruning, and discharge-context filtering now share consistent windowing + logic for easier debugging.
+- **Negation scope control** – Choose where to scan for cues: `left` (default), `right`, or `both`.
+- **Substance context window** – Require that matches occur near a user-supplied vocabulary.
+- **Deterministic, gated previews** – Previews only show rows that **pass all gates** (substance/negation/FP/discharge) with fixed-seed sampling.
+- **Notebook-friendly previews** – Return previews as a **DataFrame** (`previews_df`) for interactive review.
+- **Line-break normalization** – Remove literal markers (default `"$+$"`) and collapse whitespace.
+- **Batteries included** – A ready-to-use “ABC” checklist + default terms list.
+- **CLI & Python API** – Use from shell scripts or notebooks
 ---
 
 
@@ -47,6 +47,8 @@ pip install -e .[dev]   # installs sudregex + black, isort, flake8, pytest, etc.
 sudregex --help
 Run extraction (CSV with commas) using the default pruning behavior:
 
+
+
 sudregex --extract \
   --in_file path/to/notes.csv \
   --out_file path/to/results.csv \
@@ -54,7 +56,10 @@ sudregex --extract \
   --termslist path/to/termslist.py \
   --terms_active alcohol_terms,opioid_terms \
   --separator , \
-  --parallel --n-workers 2
+  --parallel --n-workers 2 \
+  --negation-scope left \
+  --exclude-discharge-mentions
+
 ```
 ### Discharge-instruction pruning
 
@@ -101,35 +106,53 @@ sudregex --extract \
 ```bash
 import sudregex as sud
 
-# Use the packaged defaults if desired
+# Use packaged defaults if desired
 checklist = sud.checklist_abc
 terms = sud.default_termslist
 
-# DataFrame API
-df_results = sud.extract_df(
-    df=my_notes_df,                  # columns: note_id, note_text (and optional grid)
-    checklist=checklist,
-    termslist=terms,
+# ---- In-memory DataFrame API ----
+result_df, previews_df = sud.extract_df(
+    df=my_notes_df,                           # requires columns: note_id, note_text
+    checklist=checklist,                      # dict or path to checklist.py (must define `checklist`)
+    termslist=terms,                          # dict or path to termslist.py (must define groups)
     terms_active="alcohol_terms,opioid_terms",
-    parallel=True,                   # <— enable parallel apply (if pandarallel is installed)
-    n_workers=2,                     
-    include_note_text=False,
-    exclude_discharge_mentions=True, # default True; set False to disable pruning
+    include_note_text=True,                   # keep text in result_df if you want to eyeball later
+    exclude_discharge_mentions=True,          # default True
+    preview_count=10,                         # gated previews (pass all checks)
+    preview_span=120,                         # chars on each side
+    negation_scope="left",                    # try "both" for stricter negation
+    debug=False,
+    return_previews_df=True,                  # <<< NEW: get previews as a DataFrame
 )
 
-# File API (CSV/TSV/…)
-result = sud.extract(
+# previews_df columns: item_key, note_id, span_start, span_end, snippet, snippet_marked
+previews_df.head()
+
+# Example: show marked previews for a single checklist item
+previews_df.query("item_key == 'cocaine_mention'")[["note_id","snippet_marked"]].head(10)
+
+# Optional: join a single preview back to the results per note (for convenience)
+one_preview = (previews_df.groupby("note_id").first()
+               .reset_index()[["note_id","snippet_marked"]])
+result_with_preview = result_df.merge(one_preview, on="note_id", how="left")
+
+
+# ---- File API ----
+sud.extract(
     in_file="notes.csv",
     out_file="results.csv",
     checklist="path/to/checklist.py",
     separator=",",
     termslist="path/to/termslist.py",
     terms_active="opioid_terms",
-    parallel=True,
-    n_workers=2,                      
     include_note_text=False,
-    exclude_discharge_mentions=False, # keep raw matches even in discharge contexts
+    exclude_discharge_mentions=False,         # keep raw matches even in discharge contexts
+    preview_count=10,
+    preview_file="note_previews.txt",
+    preview_csv="previews.csv",
+    negation_scope="both",
 )
+
 
 ```
 ---
@@ -145,6 +168,20 @@ termslist = sud.default_termslist
 termslist 
 
 ---
+
+## Changelog (highlights)
+
+0.2.0
+
+Major refactor: unified gating utilities for substance/negation/common-FP/discharge.
+
+New negation_scope (left/right/both) for CLI and Python API.
+
+In-memory previews: extract_df(..., return_previews_df=True) now returns (result_df, previews_df).
+
+Previews are gated and include highlighted variants (snippet_marked).
+
+Early file checks, dtype normalization, clearer errors.
 
 ## License 
 MIT – see LICENSE for details.

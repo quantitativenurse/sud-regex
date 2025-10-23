@@ -51,3 +51,5 @@ Thumbs.db
 ChecklistValidation/
 *csv
 *txt
+/data/g_jeffery_lab/substance_use_disorders/code/preprocessing/regex/generalized/regex_package/unittests/artifacts
+/data/g_jeffery_lab/substance_use_disorders/code/preprocessing/regex/generalized/regex_package/unittests/data

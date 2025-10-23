@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import argparse
+import os
 import sys
 import traceback
 
@@ -12,12 +13,11 @@ def main():
     parser = argparse.ArgumentParser(prog="sudregex")
     parser.add_argument("-v", "--version", action="version", version=f"sudregex {__version__}")
 
-    # Mutually exclusive modes
+    # Modes
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--extract", action="store_true", help="Perform regular expression extraction")
     mode.add_argument("--validate", action="store_true", help="Validate a checklist against labeled examples")
 
-    # Shared-ish
     parser.add_argument("--checklist", help="Path to the checklist .py file (must define `checklist`)")
 
     # -------- Extract args --------
@@ -26,7 +26,7 @@ def main():
     parser.add_argument("--separator", default=",", help="Custom separator (default ',')")
     parser.add_argument("--nrows", type=int, default=None, help="Number of rows to read (default: all)")
     parser.add_argument("--chunk_size", type=int, default=None, help="Rows to analyze per chunk (default: no chunking)")
-    parser.add_argument("--run_tests", action="store_true", help="Run tests")
+    parser.add_argument("--run_tests", action="store_true", help="Run tests (currently unused)")
     parser.add_argument("--terms", type=str, help="Comma-separated list of EXTRA terms (in addition to group)")
     parser.add_argument("--termslist", type=str, help="Path to Python file with term lists")
     parser.add_argument("--terms_active", type=str, help="Comma-separated group names in --termslist to use")
@@ -35,6 +35,27 @@ def main():
         "--n-workers", dest="n_workers", type=int, default=None, help="Number of workers for pandarallel (optional)"
     )
     parser.add_argument("--include_note_text", action="store_true", help="Include note text in output CSV")
+    parser.add_argument(
+        "--preview-count", type=int, default=0, help="Number of preview snippets per matching item (default: 0 = off)"
+    )
+    parser.add_argument(
+        "--preview-span", type=int, default=100, help="Chars to show on each side of a match in previews (default: 100)"
+    )
+    parser.add_argument("--preview-file", type=str, default=None, help="If set, append previews to this file (text).")
+    parser.add_argument(
+        "--preview-csv",
+        type=str,
+        default=None,
+        help="If set, write previews to this CSV (schema: item_key,note_id,span_start,span_end,snippet).",
+    )
+
+    # NEW: negation scope
+    parser.add_argument(
+        "--negation-scope",
+        choices=["left", "right", "both"],
+        default="left",
+        help="Where to look for negation cues relative to a hit (default: left).",
+    )
 
     # --- Discharge-mentions policy (default: EXCLUDE) ---
     dis = parser.add_mutually_exclusive_group()
@@ -50,14 +71,12 @@ def main():
         action="store_true",
         help="Exclude matches that occur in discharge-instruction contexts (default).",
     )
-    # Back-compat with older docs; hidden in help:
     parser.add_argument(
         "--no-exclude-discharge-mentions",
         dest="exclude_discharge_mentions",
         action="store_false",
         help=argparse.SUPPRESS,
     )
-    # Ensure the default really is 'exclude'
     parser.set_defaults(exclude_discharge_mentions=True)
 
     # -------- Validate args --------
@@ -83,20 +102,34 @@ def main():
     args = parser.parse_args()
     helper.PRINT = args.debug
 
-    # No mode chosen → help
     if not args.extract and not args.validate:
         parser.print_help()
         return
 
     try:
         if args.extract:
-            # Required args check
+            # Required args
             if not args.in_file or not args.out_file or not args.checklist:
                 print("[ERROR] --in_file, --out_file, and --checklist are required for --extract.")
                 sys.exit(1)
 
-            # Prepare terms list if provided
-            terms_list = args.terms.split(",") if args.terms else None
+            # Early file checks (friendlier errors)
+            if not os.path.exists(args.in_file):
+                print(f"[ERROR] Input file not found: {args.in_file}", file=sys.stderr)
+                sys.exit(1)
+            if not os.path.exists(args.checklist):
+                print(f"[ERROR] Checklist file not found: {args.checklist}", file=sys.stderr)
+                sys.exit(1)
+
+            # Tidy terms (trim + drop empties)
+            terms_list = [t.strip() for t in args.terms.split(",") if t.strip()] if args.terms else None
+
+            if args.debug:
+                print(
+                    f"[DEBUG] negation_scope={args.negation_scope}, "
+                    f"exclude_discharge={args.exclude_discharge_mentions}, "
+                    f"preview_count={args.preview_count}, preview_span={args.preview_span}"
+                )
 
             extract(
                 in_file=args.in_file,
@@ -111,15 +144,27 @@ def main():
                 include_note_text=args.include_note_text,
                 nrows=args.nrows,
                 chunk_size=args.chunk_size,
-                debug=args.debug,  # ← pass through so extract doesn't overwrite helper.PRINT
-                # discharge mentions policy:
+                debug=args.debug,
                 exclude_discharge_mentions=args.exclude_discharge_mentions,
+                preview_count=args.preview_count,
+                preview_span=args.preview_span,
+                preview_file=args.preview_file,
+                preview_csv=args.preview_csv,
+                # NEW passthrough
+                negation_scope=args.negation_scope,
             )
             return
 
         if args.validate:
             if not args.checklist or not args.examples:
                 print("[ERROR] --checklist and --examples are required for --validate.")
+                sys.exit(1)
+
+            if not os.path.exists(args.checklist):
+                print(f"[ERROR] Checklist file not found: {args.checklist}", file=sys.stderr)
+                sys.exit(1)
+            if not os.path.exists(args.examples):
+                print(f"[ERROR] Examples file not found: {args.examples}", file=sys.stderr)
                 sys.exit(1)
 
             checklist = import_python_object(args.checklist, "checklist")

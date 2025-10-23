@@ -133,7 +133,7 @@ checklist = {
     },
     "11b": {
         "lab": "#11b Strong Preference, IV",
-        "pat": "r((patient|pt) (request|prefer|(prefers to take))([^\.]{1,10}IV))",
+        "pat": r"((patient|pt) (request|prefer|(prefers to take))([^\.]{1,10}IV))",
         "col_name": "strong_preference_IV",
         "opioid": False,
         "negation": False,
@@ -174,7 +174,7 @@ checklist = {
     },
     "15": {
         "lab": '#15 "Patient indicated she or he ‘‘needs’’ or ‘‘must have’’ analgesic meds"',
-        "pat": "((must have)|demands)",
+        "pat": r"((must have)|demands)",
         "col_name": "needs_must_have",
         "opioid": True,
         "negation": False,
