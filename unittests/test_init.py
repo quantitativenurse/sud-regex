@@ -67,42 +67,53 @@ def _mk_checklist(item_name="foo_chk", pat=re.compile("foo"), **flags):
             "preview": flags.get("preview", False),
         }
     }
+
+
 def test_extract_df_negation_scope_left_vs_right():
-    df = pd.DataFrame({
-        "note_id": ["1", "2"],
-        "note_text": ["not foo here", "foo not here"],
-    })
+    df = pd.DataFrame(
+        {
+            "note_id": ["1", "2"],
+            "note_text": ["not foo here", "foo not here"],
+        }
+    )
     checklist = _mk_checklist(negation=True)
 
     out_left = sudregex.extract_df(
-        df, checklist, terms=["__dummy__"],
-        negation_scope="left", include_note_text=True, remove_linebreaks=False
+        df, checklist, terms=["__dummy__"], negation_scope="left", include_note_text=True, remove_linebreaks=False
     )
     out_right = sudregex.extract_df(
-        df, checklist, terms=["__dummy__"],
-        negation_scope="right", include_note_text=True, remove_linebreaks=False
+        df, checklist, terms=["__dummy__"], negation_scope="right", include_note_text=True, remove_linebreaks=False
     )
 
     # Assert on the NEGATED (final) mask, not the base count
-    assert out_left.loc[out_left.note_id == "1", "foo_chk_NEG"].iloc[0] == 0   # "not" to the left → drop
-    assert out_right.loc[out_right.note_id == "2", "foo_chk_NEG"].iloc[0] == 0 # "not" to the right → drop
-
+    assert out_left.loc[out_left.note_id == "1", "foo_chk_NEG"].iloc[0] == 0  # "not" to the left → drop
+    assert out_right.loc[out_right.note_id == "2", "foo_chk_NEG"].iloc[0] == 0  # "not" to the right → drop
 
 
 def test_extract_df_discharge_toggle():
-    df = pd.DataFrame({
-        "note_id": ["1", "2"],
-        "note_text": ["discharge instructions: foo only.", "regular note foo present"],
-    })
+    df = pd.DataFrame(
+        {
+            "note_id": ["1", "2"],
+            "note_text": ["discharge instructions: foo only.", "regular note foo present"],
+        }
+    )
     checklist = _mk_checklist()
 
     out_exclude = sudregex.extract_df(
-        df, checklist, terms=["__dummy__"],
-        exclude_discharge_mentions=True, include_note_text=True, remove_linebreaks=False
+        df,
+        checklist,
+        terms=["__dummy__"],
+        exclude_discharge_mentions=True,
+        include_note_text=True,
+        remove_linebreaks=False,
     )
     out_include = sudregex.extract_df(
-        df, checklist, terms=["__dummy__"],
-        exclude_discharge_mentions=False, include_note_text=True, remove_linebreaks=False
+        df,
+        checklist,
+        terms=["__dummy__"],
+        exclude_discharge_mentions=False,
+        include_note_text=True,
+        remove_linebreaks=False,
     )
 
     # When excluding discharge mentions, row 1 should be 0; when including, it should be >0
@@ -135,7 +146,5 @@ def test_extract_df_requires_terms_or_termslist():
 def test_extract_df_id_dtype_is_string():
     df = pd.DataFrame({"note_id": [101], "note_text": ["foo foo"]})
     checklist = _mk_checklist()
-    out = sudregex.extract_df(
-        df, checklist, terms=["__dummy__"], include_note_text=False, remove_linebreaks=False
-    )
+    out = sudregex.extract_df(df, checklist, terms=["__dummy__"], include_note_text=False, remove_linebreaks=False)
     assert out["note_id"].dtype.name == "string"
