@@ -55,6 +55,8 @@ include = ["sudregex*"]
 [tool.black]
 line-length = 120
 target-version = ["py311"]
+exclude = '\.ipynb$'
+
 
 [tool.isort]
 profile = "black"
