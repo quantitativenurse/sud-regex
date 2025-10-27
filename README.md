@@ -3,7 +3,7 @@
 
 # sudregex
 
-> **Version:** 0.2.0
+> **Version:** 0.1.4
 
 A lightweight, high-throughput pipeline for regex-driven extraction with negation and false-positive pruning—built for Substance Use Disorder (SUD) research, but flexible enough for general clinical text mining.
 
@@ -171,7 +171,7 @@ termslist
 
 ## Changelog (highlights)
 
-0.2.0
+0.1.4
 
 Major refactor: unified gating utilities for substance/negation/common-FP/discharge.
 
