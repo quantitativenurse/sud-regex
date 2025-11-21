@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import traceback
+import warnings
 
 from . import __version__, extract, helper  # import extract from package root
 from .validation import import_python_object, parse_text, validate_rows
@@ -49,6 +50,32 @@ def main():
         help="If set, write previews to this CSV (schema: item_key,note_id,span_start,span_end,snippet).",
     )
 
+    # NEW: identifier control (person/note id/extra ids)
+    parser.add_argument(
+        "--person-column",
+        type=str,
+        default=None,
+        help="Name of the person identifier column (replaces --grid-column).",
+    )
+    parser.add_argument(  # DEPRECATED shim
+        "--grid-column",
+        type=str,
+        default=None,
+        help="DEPRECATED: use --person-column instead.",
+    )
+    parser.add_argument(
+        "--note-id-column",
+        type=str,
+        default=None,
+        help="Name of the note identifier column (default: 'note_id' if present).",
+    )
+    parser.add_argument(
+        "--id-columns",
+        type=str,
+        default=None,
+        help="Comma-separated list of extra identifier columns to include (e.g., 'station_id,visit_oid,provider_sid').",
+    )
+
     # NEW: negation scope
     parser.add_argument(
         "--negation-scope",
@@ -79,6 +106,19 @@ def main():
     )
     parser.set_defaults(exclude_discharge_mentions=True)
 
+    # --- No-header support ---
+    parser.add_argument("--no-header", dest="has_header", action="store_false", help="Input file has no header row.")
+    parser.add_argument("--has-header", dest="has_header", action="store_true", help=argparse.SUPPRESS)
+    parser.set_defaults(has_header=True)
+
+    parser.add_argument(
+        "--columns",
+        type=str,
+        default=None,
+        help="When using --no-header, provide comma-separated column names IN FILE ORDER "
+        "(e.g., 'id_note,patient_id,note_text,station_id').",
+    )
+
     # -------- Validate args --------
     parser.add_argument(
         "--examples", help="Path to examples file ('item | expected | note_text' or legacy '!^!' format)"
@@ -101,6 +141,15 @@ def main():
 
     args = parser.parse_args()
     helper.PRINT = args.debug
+
+    # --- normalize identifier args + deprecation shim ---
+    if args.grid_column and not args.person_column:
+        warnings.warn("--grid-column is deprecated; use --person-column instead.", DeprecationWarning)
+        args.person_column = args.grid_column
+
+    extra_id_cols = []
+    if args.id_columns:
+        extra_id_cols = [c.strip() for c in args.id_columns.split(",") if c.strip()]
 
     if not args.extract and not args.validate:
         parser.print_help()
@@ -128,8 +177,21 @@ def main():
                 print(
                     f"[DEBUG] negation_scope={args.negation_scope}, "
                     f"exclude_discharge={args.exclude_discharge_mentions}, "
-                    f"preview_count={args.preview_count}, preview_span={args.preview_span}"
+                    f"preview_count={args.preview_count}, preview_span={args.preview_span}, "
+                    f"has_header={args.has_header}, columns={args.columns}"
                 )
+
+            # Build identifier kwargs only when provided to avoid overriding defaults with None
+            id_kwargs = {}
+            if args.person_column:
+                id_kwargs["person_column"] = args.person_column
+            if args.note_id_column:
+                id_kwargs["id_column"] = args.note_id_column
+            if extra_id_cols:
+                id_kwargs["extra_id_columns"] = extra_id_cols
+
+            # Build no-header columns list
+            no_header_cols = [c.strip() for c in args.columns.split(",")] if args.columns else None
 
             extract(
                 in_file=args.in_file,
@@ -150,8 +212,10 @@ def main():
                 preview_span=args.preview_span,
                 preview_file=args.preview_file,
                 preview_csv=args.preview_csv,
-                # NEW passthrough
                 negation_scope=args.negation_scope,
+                has_header=args.has_header,  # NEW
+                no_header_columns=no_header_cols,  # NEW
+                **id_kwargs,  # identifiers (person/note/extra)
             )
             return
 

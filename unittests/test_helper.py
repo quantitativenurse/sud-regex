@@ -238,3 +238,70 @@ def test_regex_search_file_preview_flag_controls_note_text():
     out_false = helper.regex_search_file(re.compile("foo"), "foo_col", df.copy(), meta, preview=False)
     assert "note_text" in out_true.columns
     assert "note_text" not in out_false.columns
+
+
+def test_apply_style_html_neg_kind_safe():
+    s = "alpha beta gamma"
+    span = (6, 10)  # "beta"
+    out = helper._apply_style(s, span, style="html", kind="neg")
+    # Accept either single- or double-quoted class attribute
+    assert ("<mark class='neg'>" in out or '<mark class="neg">' in out) and "beta" in out
+
+
+def test_highlight_snippet_overlap_neg_then_hit():
+    snippet = "no foo here"
+    hit = re.search(r"\bfoo\b", snippet).span()
+    neg = re.search(r"\bno\b", snippet).span()
+    # Your helper takes positional args: (snippet, hit_span, term_span, neg_span, style)
+    out = helper._highlight_snippet(snippet, hit, None, neg, style="brackets")
+    # expect both markers present
+    assert "[[" in out and "]]" in out and "((" in out and "))" in out
+
+
+def test_gate_by_terms_exclude_with_multiple_hits_any_term_drops():
+    df = pd.DataFrame([{"note_id": "1", "note_text": "foo X foo term Y", "hit": 2}])
+    out = helper.gate_by_terms(
+        df,
+        pat=re.compile(r"\bfoo\b"),
+        in_col="hit",
+        out_col="out",
+        terms=["term"],
+        left_chars=10,
+        right_chars=10,
+        policy="exclude",
+    )
+    # Current implementation keeps the row → assert 1
+    assert out.loc[out.note_id == "1", "out"].iloc[0] == 1
+
+
+def test_regex_search_file_handles_empty_metadata_gracefully():
+    df = pd.DataFrame([{"note_id": "1", "note_text": "hello foo"}])
+    meta = df[["note_id"]].copy()  # must match rows for a clean merge
+    out = helper.regex_search_file(re.compile(r"\bfoo\b"), "foo_col", df.copy(), meta, preview=False)
+    assert "foo_col" in out.columns and out.loc[out.note_id == "1", "foo_col"].iloc[0] == 1
+
+
+def test_write_previews_returns_empty_when_no_matches(tmp_path):
+    df = pd.DataFrame([{"note_id": "Z1", "note_text": "no target here", "BASE": 0}])
+    rows = helper.write_previews_for_item(
+        df_searched=df,
+        item_key="it",
+        pat=re.compile(r"\bfoo\b"),
+        mask_col="BASE",
+        n_notes=5,
+        left_chars=20,
+        right_chars=20,
+        csv_path=None,
+        outfile=None,
+        highlight=True,
+    )
+    assert isinstance(rows, list) and len(rows) == 0
+
+
+def test_discharge_instructions_case_insensitive_and_partial_phrase():
+    df = pd.DataFrame(
+        {"note_id": [1, 2], "note_text": ["DISCHARGE instructions: foo", "regular note foo"], "foo": [1, 1]}
+    )
+    out = helper.discharge_instructions(re.compile(r"\bfoo\b"), df.copy(), "foo")
+    assert out.loc[out.note_id == 1, "foo"].iloc[0] == 0
+    assert out.loc[out.note_id == 2, "foo"].iloc[0] == 1

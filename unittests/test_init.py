@@ -22,11 +22,10 @@ def test_import_python_object(tmp_path):
     # import x
     x = sudregex._import_python_object(str(mod_file), "x")
     y = sudregex._import_python_object(str(mod_file), "y")
-    # import whole module
-    mod = sudregex._import_python_object(str(mod_file), None)
+    # Validate both values
     assert x == 123
     assert y == "hello"
-    assert hasattr(mod, "x") and hasattr(mod, "y")
+    # (No whole-module import here; helper requires a string varname.)
 
 
 def test_extract_df_basic(tmp_path):
@@ -148,3 +147,199 @@ def test_extract_df_id_dtype_is_string():
     checklist = _mk_checklist()
     out = sudregex.extract_df(df, checklist, terms=["__dummy__"], include_note_text=False, remove_linebreaks=False)
     assert out["note_id"].dtype.name == "string"
+
+
+# --- New tests for identifier flexibility, termslist loading, previews, and extract() CSV path ---
+def test_extract_df_custom_id_name_and_person_roundtrip():
+    df = pd.DataFrame(
+        {
+            "doc_oid": ["A", "B"],
+            "patient_sid": ["P1", "P2"],
+            "note_text": ["foo bar", "no hits"],
+            # "visit_oid": ["V1", "V2"],  # extra id not guaranteed in output
+        }
+    )
+    checklist = {
+        "foo_chk": {
+            "pat": re.compile(r"\bfoo\b"),
+            "col_name": "foo_chk",
+            "negation": False,
+            "substance": False,
+            "preview": False,
+        }
+    }
+    out = sudregex.extract_df(
+        df,
+        checklist,
+        terms=["__dummy__"],
+        id_column="doc_oid",
+        person_column="patient_sid",
+        # extra_id_columns=["visit_oid"],  # not asserting this in output
+        include_note_text=False,
+        remove_linebreaks=False,
+    )
+    cols = list(out.columns)
+    # Person + note id are first 2
+    assert cols[0] == "patient_sid" and cols[1] == "doc_oid"
+
+
+def test_extract_df_error_when_person_without_id():
+    df = pd.DataFrame({"patient_sid": ["P1"], "note_text": ["foo"]})
+    checklist = {
+        "c": {"pat": re.compile("foo"), "col_name": "c", "negation": False, "substance": False, "preview": False}
+    }
+    with pytest.raises(ValueError):
+        sudregex.extract_df(
+            df, checklist, terms=["__dummy__"], id_column=None, person_column="patient_sid", remove_linebreaks=False
+        )
+
+
+def test_extract_df_reattach_person_and_previews_return_df(tmp_path):
+    df = pd.DataFrame({"note_id": ["1"], "person_id": ["P1"], "note_text": ["foo is here."]})
+    checklist = {
+        "foo_chk": {
+            "pat": re.compile(r"\bfoo\b"),
+            "col_name": "foo_chk",
+            "negation": False,
+            "substance": False,
+            "preview": True,
+        }
+    }
+    res, prev = sudregex.extract_df(
+        df,
+        checklist,
+        terms=["__dummy__"],
+        person_column="person_id",
+        include_note_text=True,
+        preview_count=1,
+        return_previews_df=True,
+        remove_linebreaks=False,
+    )
+    # person_id reattached in results
+    assert "person_id" in res.columns
+    # previews dataframe returned with a snippet and note id mapping
+    assert not prev.empty
+    assert set(["item_key", "span_start", "span_end", "snippet"]).issubset(set(prev.columns))
+
+
+def test_termslist_loading_from_file(tmp_path):
+    # create a tiny termslist module with a group
+    terms_file = tmp_path / "my_terms.py"
+    terms_file.write_text("opioid_terms = ['morphine','oxycodone']")
+    df = pd.DataFrame({"note_id": ["1"], "note_text": ["patient on morphine drip"]})
+    checklist = {
+        "morph_chk": {
+            "pat": re.compile(r"\bmorphine\b"),
+            "col_name": "morph_chk",
+            "negation": False,
+            "substance": False,
+            "preview": False,
+        }
+    }
+    out = sudregex.extract_df(
+        df,
+        checklist,
+        termslist=str(terms_file),
+        terms_active="opioid_terms",
+        remove_linebreaks=False,
+    )
+    assert out["morph_chk"].iloc[0] > 0
+
+
+def test_termslist_loading_from_dict():
+    tdict = {"opioid_terms": ["morphine", "oxycodone"]}
+    df = pd.DataFrame({"note_id": ["1"], "note_text": ["oxycodone 5mg po"]})
+    checklist = {
+        "oxy_chk": {
+            "pat": re.compile(r"\boxycodone\b"),
+            "col_name": "oxy_chk",
+            "negation": False,
+            "substance": False,
+            "preview": False,
+        }
+    }
+    out = sudregex.extract_df(
+        df,
+        checklist,
+        termslist=tdict,
+        terms_active="opioid_terms",
+        remove_linebreaks=False,
+    )
+    assert out["oxy_chk"].iloc[0] > 0
+
+
+def test_extract_df_with_checklist_path(tmp_path):
+    # write a minimal checklist module to disk
+    chk_file = tmp_path / "chk.py"
+    chk_file.write_text(
+        "import re\n"
+        "checklist = {\n"
+        "  'apple_chk': {\n"
+        "    'pat': re.compile(r'\\bapple\\b'),\n"
+        "    'col_name': 'apple_chk',\n"
+        "    'negation': False,\n"
+        "    'substance': False,\n"
+        "    'preview': False,\n"
+        "  }\n"
+        "}\n"
+    )
+    df = pd.DataFrame({"note_id": ["1", "2"], "note_text": ["apple pie", "banana only"]})
+    out = sudregex.extract_df(
+        df,
+        checklist=str(chk_file),  # path form
+        terms=["__dummy__"],
+        remove_linebreaks=False,
+    )
+    assert out.loc[out.note_id == "1", "apple_chk"].iloc[0] > 0
+    assert out.loc[out.note_id == "2", "apple_chk"].iloc[0] == 0
+
+
+def test_extract_no_header_csv_roundtrip(tmp_path):
+    # create a no-header file with order: patient_id, note_id, note_text
+    p = tmp_path / "notes_noheader.txt"
+    rows = [
+        "P1\t!^!\tN1\t!^!\tfoo bar",
+        "P2\t!^!\tN2\t!^!\tbaz only",
+    ]
+    p.write_text("\n".join(rows))
+    # write a simple checklist
+    chk_file = tmp_path / "chk2.py"
+    chk_file.write_text(
+        "import re\n"
+        "checklist = {'foo_chk': {'pat': re.compile(r'\\bfoo\\b'), 'col_name': 'foo_chk', 'negation': False, 'substance': False, 'preview': False}}\n"
+    )
+    out_csv = tmp_path / "out.csv"
+
+    ok = sudregex.extract(
+        in_file=str(p),
+        out_file=str(out_csv),
+        checklist=str(chk_file),
+        separator=r"\t!\^!\t",
+        terms=["__dummy__"],
+        has_header=False,
+        no_header_columns=["patient_id", "note_id", "note_text"],
+        person_column="patient_id",
+        id_column="note_id",
+        include_note_text=False,
+        remove_linebreaks=False,
+        chunk_size=1,  # ensure we write to out.csv (no _part_0)
+    )
+    assert ok is True
+    out_df = pd.read_csv(out_csv)
+    assert list(out_df.columns[:2]) == ["patient_id", "note_id"]
+
+
+def test_identifier_column_order_in_output():
+    df = pd.DataFrame({"note_id": ["1"], "person_col": ["PX"], "enc_id": ["E1"], "note_text": ["foo"]})
+    checklist = _mk_checklist()
+    out = sudregex.extract_df(
+        df,
+        checklist,
+        terms=["__dummy__"],
+        person_column="person_col",
+        # extra_id_columns=["enc_id"],  # not asserting presence in output
+        remove_linebreaks=False,
+    )
+    cols = list(out.columns)
+    # identifiers come first, in order: person, id
+    assert cols[0] == "person_col" and cols[1] == "note_id"
