@@ -3,7 +3,7 @@
 
 # sudregex
 
-> **Version:** 0.1.4
+> **Version:** 0.1.5
 
 A lightweight, high-throughput pipeline for regex-driven extraction with negation and false-positive pruning—built for Substance Use Disorder (SUD) research, but flexible enough for general clinical text mining.
 
@@ -37,6 +37,14 @@ pip install -U pip
 pip install -e .[dev]   # installs sudregex + black, isort, flake8, pytest, etc.
 ---
 ```
+## Identifier columns 
+
+Your data doesn’t have to be strict OMOP. You can map your identifiers:
+
+--person-column 
+
+--note-id-column
+
 
 ## Usage
 - For interactive usage on notebooks refer to our tutorial <https://github.com/quantitativenurse/sud-regex/blob/main/notebook_tutorial.ipynb>
@@ -116,6 +124,8 @@ result_df, previews_df = sud.extract_df(
     checklist=checklist,                      # dict or path to checklist.py (must define `checklist`)
     termslist=terms,                          # dict or path to termslist.py (must define groups)
     terms_active="alcohol_terms,opioid_terms",
+    person_column="patient_sid",             # optional: your person identifier
+    id_column="doc_oid",                     # optional: your note/document ID
     include_note_text=True,                   # keep text in result_df if you want to eyeball later
     exclude_discharge_mentions=True,          # default True
     preview_count=10,                         # gated previews (pass all checks)
