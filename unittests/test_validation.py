@@ -138,9 +138,7 @@ def test_helper_negation_false_when_no_cue():
 
 def test_validate_rows_basic_accepts_match():
     checklist = _mk_checklist()
-    df = pd.DataFrame(
-        [{"item_key": "foo_chk", "item_code": "foo_chk", "expected": 1, "note_text": "patient has foo"}]
-    )
+    df = pd.DataFrame([{"item_key": "foo_chk", "item_code": "foo_chk", "expected": 1, "note_text": "patient has foo"}])
 
     detailed, by_item, previews = validate_rows(checklist, df)
 
@@ -253,9 +251,7 @@ def test_validate_rows_collect_previews():
 
 def test_validate_checklist_dataframe_input():
     checklist = _mk_checklist()
-    df = pd.DataFrame(
-        [{"item_key": "foo_chk", "item_code": "foo_chk", "expected": 1, "note_text": "patient has foo"}]
-    )
+    df = pd.DataFrame([{"item_key": "foo_chk", "item_code": "foo_chk", "expected": 1, "note_text": "patient has foo"}])
 
     detailed, by_item = validate_checklist(checklist, df)
 

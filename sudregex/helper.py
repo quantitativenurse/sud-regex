@@ -182,7 +182,6 @@ def _window(text: str, start: int, stop: int, left: int, right: int) -> Tuple[in
 # ============================================================
 
 
-
 def remove_line_break(
     text: Union[str, bytes],
     break_markers: Union[str, List[str]] = r"\$\+\$",
