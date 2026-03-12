@@ -1,11 +1,15 @@
 """
-Helper file so that functions are stored separately from main execution file.
-Refactor: unified gating utilities (substance/opioid, negation, common FP), plus
-preview/highlighting helpers. Public API preserved; negation scope is opt-in.
+Helper utilities for regex-driven extraction, gating, and preview generation.
+
+This module contains the reusable text-processing and row-wise matching logic
+used by the public extraction APIs. It provides pattern counting, substance
+and negation gating, false-positive and discharge-context pruning, preview
+generation, and backend-aware row execution for serial and parallel workflows.
 """
 
 import os
 import re
+from functools import partial
 from typing import Iterable, List
 from typing import Pattern as RePattern
 from typing import Tuple, Union
@@ -13,55 +17,145 @@ from typing import Tuple, Union
 import pandas as pd
 
 # ============================================================
-# Global flags & storage
+# Global flags and shared state
 # ============================================================
 
-PRINT = False  # set by callers (debug mode)
+# Debug logging flag, configured by the caller.
+PRINT = False
 
-# term storage (_terms by main)
+# Active term vocabulary configured at runtime.
 TERMS_LIST: list[str] = []
 TERMS_COMPILED: list[re.Pattern] = []
 
-# Default scanning windows (tuned to current behavior)
+# Default scan windows, in characters.
 WIN_SUBSTANCE = 100
 WIN_NEGATION = 65
-WIN_CFP = 65  # common false positive
+WIN_CFP = 65
 WIN_DISCHARGE = 250
 
 # ============================================================
-# Logging / Debug helper
+# Logging helper
 # ============================================================
 
 
 def _dbg(msg: str):
+    """Print a debug message when debug mode is enabled."""
     if PRINT:
         print(msg)
 
 
 # ============================================================
-# Regex & text utilities
+# Parallel apply helper
+# ============================================================
+
+
+def _apply_series(
+    series: pd.Series,
+    func,
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
+) -> pd.Series:
+    """
+    Apply a function to a pandas Series using the configured execution backend.
+
+    Supported modes:
+    - serial execution via pandas `.apply()`
+    - `pandarallel` via `.parallel_apply()`
+    - `loky` via joblib `Parallel(..., backend="loky")`
+    """
+    if not use_parallel or not parallel_backend:
+        return series.apply(func)
+
+    backend = parallel_backend.lower()
+
+    if backend == "pandarallel":
+        if hasattr(series, "parallel_apply"):
+            return series.parallel_apply(func)
+        return series.apply(func)
+
+    if backend == "loky":
+        try:
+            from joblib import Parallel, delayed
+        except ImportError as e:
+            raise ImportError("joblib is required for parallel_backend='loky'") from e
+
+        values = series.tolist()
+        results = Parallel(n_jobs=n_workers or -1, backend="loky")(delayed(func)(value) for value in values)
+        return pd.Series(results, index=series.index)
+
+    raise ValueError(f"Unsupported parallel_backend={parallel_backend!r}")
+
+
+# ============================================================
+# Regex and pattern utilities
 # ============================================================
 
 
 def _finditer(pat: RePattern | str, text: str):
+    """Return an iterator over pattern matches for a compiled or raw pattern."""
     if isinstance(pat, re.Pattern):
         return pat.finditer(text)
     return re.finditer(pat, text, flags=re.IGNORECASE | re.MULTILINE)
 
 
 def _search(term: RePattern | str, text: str):
+    """Return True if a compiled or raw pattern is found in the text."""
     if isinstance(term, re.Pattern):
         return term.search(text) is not None
     return re.search(term, text, flags=re.IGNORECASE | re.MULTILINE) is not None
 
 
 def _compile_terms(terms: Iterable[str]) -> list[re.Pattern]:
+    """Compile a list of literal terms into case-insensitive regex patterns."""
     return [re.compile(re.escape(t), re.IGNORECASE | re.MULTILINE) for t in terms]
+
+
+def _count_pattern_matches(pat, text: str) -> int:
+    """
+    Count all matches for a compiled regex or raw regex string in the text.
+    """
+    if isinstance(pat, re.Pattern):
+        return len(pat.findall(text))
+    return len(re.findall(pat, text, flags=re.IGNORECASE | re.MULTILINE))
+
+
+def _pattern_to_payload(pat) -> tuple[str, int]:
+    """
+    Convert a compiled or raw pattern into a serializable `(pattern, flags)` payload.
+
+    This is used by backends such as Loky that benefit from passing simple
+    serializable inputs to worker processes.
+    """
+    if isinstance(pat, re.Pattern):
+        return pat.pattern, pat.flags
+    return str(pat), re.IGNORECASE | re.MULTILINE
+
+
+def _compile_payload(payload: tuple[str, int]) -> re.Pattern:
+    """Compile a `(pattern, flags)` payload back into a regex object."""
+    pattern_text, flags = payload
+    return re.compile(pattern_text, flags)
+
+
+def _term_to_payload(term) -> tuple[str, int]:
+    """
+    Convert a term or compiled regex into a serializable `(pattern, flags)` payload.
+    """
+    if isinstance(term, re.Pattern):
+        return term.pattern, term.flags
+    return re.escape(str(term)), re.IGNORECASE | re.MULTILINE
+
+
+def _count_pattern_matches_from_payload(text: str, pat_payload: tuple[str, int]) -> int:
+    """Count pattern matches using a serialized regex payload."""
+    pat = _compile_payload(pat_payload)
+    return len(pat.findall(text))
 
 
 def set_terms(terms: list[str]) -> None:
     """
-    Call once at startup to tell this helper which vocabulary to use.
+    Set the active vocabulary used by helper-level gating and previews.
     """
     global TERMS_LIST, TERMS_COMPILED
     TERMS_LIST = terms or []
@@ -71,7 +165,12 @@ def set_terms(terms: list[str]) -> None:
 
 def _window(text: str, start: int, stop: int, left: int, right: int) -> Tuple[int, int, str]:
     """
-    Safe windowing around a span [start:stop), returning (L, R, slice).
+    Return a safe context window around a match span.
+
+    Returns:
+    - left bound
+    - right bound
+    - text slice within those bounds
     """
     L = max(0, start - max(0, left))
     R = min(len(text), stop + max(0, right))
@@ -79,14 +178,9 @@ def _window(text: str, start: int, stop: int, left: int, right: int) -> Tuple[in
 
 
 # ============================================================
-# Note pre-processing
+# Note preprocessing
 # ============================================================
 
-# Memory usage (best-effort; harmless if unavailable)
-try:
-    total_memory, used_memory, free_memory = map(int, os.popen("free -t -m").readlines()[-1].split()[1:])
-except Exception:
-    total_memory, used_memory, free_memory = (0, 0, 0)
 
 
 def remove_line_break(
@@ -94,11 +188,15 @@ def remove_line_break(
     break_markers: Union[str, List[str]] = r"\$\+\$",
     replacement: str = " ",
 ) -> str:
+    """
+    Replace configured break markers and collapse repeated whitespace.
+
+    This is used to normalize note text before extraction.
+    """
     s = text.decode() if isinstance(text, (bytes, bytearray)) else str(text)
 
-    # Build regex pattern for markers
     if isinstance(break_markers, str):
-        pattern = break_markers  # treat literal as a regex pattern
+        pattern = break_markers
     else:
         parts = []
         for m in break_markers:
@@ -108,15 +206,13 @@ def remove_line_break(
                 parts.append(re.escape(m))
         pattern = "|".join(parts)
 
-    # 1) remove the markers
     s = re.sub(pattern, replacement, s)
-    # 2) collapse any run of whitespace to a single space
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
 
 # ============================================================
-# Highlighting (for previews)
+# Highlighting helpers for previews
 # ============================================================
 
 NEGATION_CUES = [
@@ -132,6 +228,7 @@ NEGATION_CUES = [
 
 
 def _first_span(pats: list[re.Pattern], text: str) -> tuple[int, int] | None:
+    """Return the span of the first matching pattern in the text, if any."""
     for p in pats:
         m = p.search(text)
         if m:
@@ -140,11 +237,14 @@ def _first_span(pats: list[re.Pattern], text: str) -> tuple[int, int] | None:
 
 
 def _apply_style(s: str, span: tuple[int, int], style: str, kind: str) -> str:
+    """
+    Apply highlight markup to a span using the requested output style.
+    """
     a, b = span
     if a is None or b is None or a < 0 or b > len(s) or a >= b:
         return s
 
-    if style == "ansi":  # inverse video
+    if style == "ansi":
         code = "\x1b[7m"
         reset = "\x1b[0m"
         return s[:a] + code + s[a:b] + reset + s[b:]
@@ -153,7 +253,6 @@ def _apply_style(s: str, span: tuple[int, int], style: str, kind: str) -> str:
         cls = {"hit": "hit", "sub": "sub", "neg": "neg"}.get(kind, "hit")
         return s[:a] + f"<mark class='{cls}'>" + s[a:b] + "</mark>" + s[b:]
 
-    # default bracket markers
     tag = {"hit": "[[", "sub": "{{", "neg": "(("}.get(kind, "[[")
     end = {"hit": "]]", "sub": "}}", "neg": "))"}.get(kind, "]]")
     return s[:a] + tag + s[a:b] + end + s[b:]
@@ -166,6 +265,9 @@ def _highlight_snippet(
     neg_span: tuple[int, int] | None,
     style: str = "brackets",
 ) -> str:
+    """
+    Highlight a preview snippet for the match, nearby substance term, and negation cue.
+    """
     s = snippet
     if rel_hit:
         s = _apply_style(s, rel_hit, style, "hit")
@@ -189,7 +291,66 @@ def _highlight_snippet(
 
 
 # ============================================================
-# Generic gating utilities (reusable)
+# Row worker helpers
+# ============================================================
+
+
+def _gate_by_terms_row(
+    text: str,
+    *,
+    pat_payload: tuple[str, int],
+    term_payloads: list[tuple[str, int]],
+    left_chars: int,
+    right_chars: int,
+    policy: str,
+) -> int:
+    """
+    Evaluate a single row for term-based gating.
+
+    Returns 1 when the row passes the configured gate policy, otherwise 0.
+    """
+    pat = _compile_payload(pat_payload)
+    term_pats = [_compile_payload(payload) for payload in term_payloads]
+
+    for m in pat.finditer(text):
+        s, e = m.span()
+        _, _, ctx = _window(text, s, e, left_chars, right_chars)
+        found = any(p.search(ctx) for p in term_pats) if term_pats else False
+        if policy == "require" and found:
+            return 1
+        if policy == "exclude" and not found:
+            return 1
+    return 0
+
+
+def _gate_by_cues_row(
+    text: str,
+    *,
+    pat_payload: tuple[str, int],
+    cue_payloads: list[tuple[str, int]],
+    left_chars: int,
+    right_chars: int,
+) -> int:
+    """
+    Evaluate a single row for cue-based gating.
+
+    Returns 1 when the row is not negated within the requested window, otherwise 0.
+    """
+    pat = _compile_payload(pat_payload)
+    cue_pats = [_compile_payload(payload) for payload in cue_payloads]
+
+    for m in pat.finditer(text):
+        s, e = m.span()
+        L, _, ctx = _window(text, s, e, left_chars, right_chars)
+        left = ctx[: s - L]
+        right = ctx[e - L :]
+        if not any(p.search(left) for p in cue_pats) and not any(p.search(right) for p in cue_pats):
+            return 1
+    return 0
+
+
+# ============================================================
+# Generic gating utilities
 # ============================================================
 
 
@@ -201,55 +362,58 @@ def gate_by_terms(
     terms: Iterable[str] | Iterable[re.Pattern],
     left_chars: int,
     right_chars: int,
-    policy: str = "require",  # "require": keep rows with ANY term in window; "exclude": drop rows with ANY term
+    policy: str = "require",
     note_col: str = "note_text",
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
 ) -> pd.DataFrame:
     """
-    Generic gate around matches in `in_col` by scanning a window near each match.
-    - 'require': out_col = 1 iff there exists a match for pat AND a term is present in its window
-    - 'exclude': out_col = 1 iff there exists a match for pat AND NO term is present in its window
+    Gate matches by scanning for term presence or absence near each hit.
+
+    Policies:
+    - `require`: keep a row only when at least one configured term appears near a hit
+    - `exclude`: keep a row only when no configured term appears near a hit
     """
-    assert policy in {"require", "exclude"}
+    if policy not in {"require", "exclude"}:
+        raise ValueError("policy must be 'require' or 'exclude'")
+
     df = df.copy()
 
-    # If the input mask column isn't present, there's nothing to scan.
     if in_col not in df.columns:
         df[out_col] = 0
         return df
 
     hits = df[df[in_col].fillna(0).astype(int) > 0].copy()
     if hits.empty:
-        # ensure out_col exists for downstream consumers
         df[out_col] = 0
         return df
 
-    # Compile terms if needed
-    term_pats = []
-    for t in terms or []:
-        if hasattr(t, "search"):
-            term_pats.append(t)  # already compiled
-        else:
-            term_pats.append(re.compile(re.escape(str(t)), re.IGNORECASE | re.MULTILINE))
+    pat_payload = _pattern_to_payload(pat)
+    term_payloads = [_term_to_payload(t) for t in (terms or [])]
 
-    def _row_ok(text: str) -> int:
-        for m in _finditer(pat, text):
-            s, e = m.span()
-            L, R, ctx = _window(text, s, e, left_chars, right_chars)
-            found = any(p.search(ctx) for p in term_pats) if term_pats else False
-            if policy == "require" and found:
-                return 1
-            if policy == "exclude" and not found:
-                return 1
-        return 0
+    row_func = partial(
+        _gate_by_terms_row,
+        pat_payload=pat_payload,
+        term_payloads=term_payloads,
+        left_chars=left_chars,
+        right_chars=right_chars,
+        policy=policy,
+    )
 
-    hits[out_col] = hits[note_col].apply(_row_ok)
+    hits[out_col] = _apply_series(
+        hits[note_col],
+        row_func,
+        use_parallel=use_parallel,
+        parallel_backend=parallel_backend,
+        n_workers=n_workers,
+    )
 
-    # Avoid suffix collisions when out_col == in_col (in-place pruning)
     df.drop(columns=[out_col], errors="ignore", inplace=True)
     df = df.merge(hits[["note_id", out_col]], on="note_id", how="left")
 
     df[out_col] = df[out_col].fillna(0).astype(int)
-    _dbg(f"[GATE] {out_col}: policy={policy}, left={left_chars}, right={right_chars}, terms={len(term_pats)}")
+    _dbg(f"[GATE] {out_col}: policy={policy}, left={left_chars}, right={right_chars}, terms={len(term_payloads)}")
     return df
 
 
@@ -261,8 +425,13 @@ def gate_by_cues_left(
     cues,
     left_chars: int,
     note_col: str = "note_text",
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
 ) -> pd.DataFrame:
-    # left-only behavior preserved (back-compat convenience)
+    """
+    Convenience wrapper for cue-based gating using only a left-side scan window.
+    """
     return gate_by_cues(
         df=df,
         pat=pat,
@@ -272,6 +441,9 @@ def gate_by_cues_left(
         left_chars=left_chars,
         right_chars=0,
         note_col=note_col,
+        use_parallel=use_parallel,
+        parallel_backend=parallel_backend,
+        n_workers=n_workers,
     )
 
 
@@ -284,10 +456,15 @@ def gate_by_cues(
     left_chars: int,
     right_chars: int,
     note_col: str = "note_text",
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
 ) -> pd.DataFrame:
     """
-    Negation-style gate scanning left/right/both sides.
-    out_col = 1 iff there exists a match for pat AND NO cue is found in the scanned window(s).
+    Gate matches by scanning for cue terms in the surrounding context window.
+
+    A row passes when a hit is present and no configured cue is found within the
+    requested left/right scan window.
     """
     df = df.copy()
     hits = df[df[in_col].fillna(0).astype(int) > 0].copy()
@@ -295,35 +472,49 @@ def gate_by_cues(
         df[out_col] = 0
         return df
 
-    cue_pats = [c if hasattr(c, "search") else re.compile(str(c), re.IGNORECASE | re.MULTILINE) for c in (cues or [])]
+    pat_payload = _pattern_to_payload(pat)
+    cue_payloads = [_term_to_payload(c) for c in (cues or [])]
 
-    def _row_ok(text: str) -> int:
-        for m in _finditer(pat, text):
-            s, e = m.span()
-            L, R, ctx = _window(text, s, e, left_chars, right_chars)
-            left = ctx[: s - L]
-            right = ctx[e - L :]
-            # keep iff NO cue appears in the scanned sides
-            if not any(p.search(left) for p in cue_pats) and not any(p.search(right) for p in cue_pats):
-                return 1
-        return 0
+    row_func = partial(
+        _gate_by_cues_row,
+        pat_payload=pat_payload,
+        cue_payloads=cue_payloads,
+        left_chars=left_chars,
+        right_chars=right_chars,
+    )
 
-    hits[out_col] = hits[note_col].apply(_row_ok)
+    hits[out_col] = _apply_series(
+        hits[note_col],
+        row_func,
+        use_parallel=use_parallel,
+        parallel_backend=parallel_backend,
+        n_workers=n_workers,
+    )
+
     df = df.merge(hits[["note_id", out_col]], on="note_id", how="left")
     df[out_col] = df[out_col].fillna(0).astype(int)
-    _dbg(f"[GATE] {out_col}: negation-window left={left_chars}, right={right_chars}, cues={len(cue_pats)}")
+    _dbg(f"[GATE] {out_col}: negation-window left={left_chars}, right={right_chars}, cues={len(cue_payloads)}")
     return df
 
 
 # ============================================================
-# Public gates (back-compatible names)
+# Public gate wrappers
 # ============================================================
 
 
-def check_for_substance(pat, col_name, col_name_substance, df_searched, span=WIN_SUBSTANCE):
+def check_for_substance(
+    pat,
+    col_name,
+    col_name_substance,
+    df_searched,
+    span=WIN_SUBSTANCE,
+    *,
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
+):
     """
-    Require at least one substance term near a hit.
-    (keeps existing signature)
+    Require at least one configured substance term near a match.
     """
     return gate_by_terms(
         df=df_searched,
@@ -334,6 +525,9 @@ def check_for_substance(pat, col_name, col_name_substance, df_searched, span=WIN
         left_chars=span,
         right_chars=span,
         policy="require",
+        use_parallel=use_parallel,
+        parallel_backend=parallel_backend,
+        n_workers=n_workers,
     )
 
 
@@ -346,11 +540,18 @@ def check_negation(
     neg=True,
     span=WIN_NEGATION,
     *,
-    side: str = "left",  # "left" (default), "right", or "both"
+    side: str = "left",
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
 ):
     """
-    Keep hits that are NOT negated by cues in the chosen scope.
-    side: "left" (default, back-compatible), "right", or "both".
+    Exclude hits negated by configured cue terms within the requested scope.
+
+    `side` may be:
+    - `"left"`
+    - `"right"`
+    - `"both"`
     """
     t = t or []
     cues = ["no ", "not ", "denie", "denial", "doubt", "never", "negative", "without", "neg", "didn't"]
@@ -360,34 +561,85 @@ def check_negation(
 
     side = (side or "left").lower()
     if side == "left":
-        return gate_by_cues_left(df_searched, pat, col_name, col_name_negated, cues, left_chars=span)
+        return gate_by_cues_left(
+            df_searched,
+            pat,
+            col_name,
+            col_name_negated,
+            cues,
+            left_chars=span,
+            use_parallel=use_parallel,
+            parallel_backend=parallel_backend,
+            n_workers=n_workers,
+        )
     if side == "right":
-        return gate_by_cues(df_searched, pat, col_name, col_name_negated, cues, left_chars=0, right_chars=span)
-    # both
-    return gate_by_cues(df_searched, pat, col_name, col_name_negated, cues, left_chars=span, right_chars=span)
+        return gate_by_cues(
+            df_searched,
+            pat,
+            col_name,
+            col_name_negated,
+            cues,
+            left_chars=0,
+            right_chars=span,
+            use_parallel=use_parallel,
+            parallel_backend=parallel_backend,
+            n_workers=n_workers,
+        )
+    return gate_by_cues(
+        df_searched,
+        pat,
+        col_name,
+        col_name_negated,
+        cues,
+        left_chars=span,
+        right_chars=span,
+        use_parallel=use_parallel,
+        parallel_backend=parallel_backend,
+        n_workers=n_workers,
+    )
 
 
-def check_common_false_positives(pat, df_searched, col_name_fp, common_fp, span=WIN_CFP):
+def check_common_false_positives(
+    pat,
+    df_searched,
+    col_name_fp,
+    common_fp,
+    span=WIN_CFP,
+    *,
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
+):
     """
-    Exclude hits if ANY common-fp term appears near them.
-    (keeps existing signature)
+    Exclude matches when common false-positive terms are found nearby.
     """
     return gate_by_terms(
         df=df_searched,
         pat=pat,
-        in_col=col_name_fp,  # note: input mask is the active mask
-        out_col=col_name_fp,  # in-place pruning behavior matches original API
+        in_col=col_name_fp,
+        out_col=col_name_fp,
         terms=common_fp or [],
         left_chars=span,
         right_chars=span,
         policy="exclude",
+        use_parallel=use_parallel,
+        parallel_backend=parallel_backend,
+        n_workers=n_workers,
     )
 
 
-def discharge_instructions(pat, df_searched, col_name_discharge, span=WIN_DISCHARGE):
+def discharge_instructions(
+    pat,
+    df_searched,
+    col_name_discharge,
+    span=WIN_DISCHARGE,
+    *,
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
+):
     """
-    Exclude hits that occur within discharge-instruction contexts.
-    (keeps existing signature)
+    Exclude matches found within discharge-instruction contexts.
     """
     discharge_terms = ["discharge instructions", "no results for"]
     return gate_by_terms(
@@ -399,11 +651,14 @@ def discharge_instructions(pat, df_searched, col_name_discharge, span=WIN_DISCHA
         left_chars=span,
         right_chars=span,
         policy="exclude",
+        use_parallel=use_parallel,
+        parallel_backend=parallel_backend,
+        n_workers=n_workers,
     )
 
 
 # ============================================================
-# PREVIEWS (gated + highlighting)
+# Preview generation
 # ============================================================
 
 
@@ -421,12 +676,17 @@ def write_previews_for_item(
     outfile: str | None = None,
     *,
     highlight: bool = True,
-    highlight_style: str = "brackets",  # 'brackets' | 'ansi' | 'html'
+    highlight_style: str = "brackets",
 ):
     """
-    Emit preview snippets from rows where mask_col == 1.
-    Adds 'snippet_marked' with highlight on hit + first nearby substance + first negation cue.
-    RETURNS: list of dict rows (so callers can aggregate to a DataFrame).
+    Write preview snippets for rows where `mask_col == 1`.
+
+    Each returned row includes:
+    - item key
+    - note identifier
+    - match span
+    - raw snippet
+    - highlighted snippet
     """
     pat_iter = (
         pat.finditer
@@ -439,7 +699,7 @@ def write_previews_for_item(
     rows = []
     hits = df_searched[df_searched[mask_col].fillna(0).astype(int) > 0]
     if hits.empty:
-        return rows  # return empty
+        return rows
 
     sample = (
         hits
@@ -453,9 +713,10 @@ def write_previews_for_item(
             text = r.get(note_col, "") or ""
             nid = r.get(note_id_col, None)
             found = False
+
             for m in pat_iter(text):
                 s, e = m.span()
-                L, R, snippet = _window(text, s, e, left_chars, right_chars)
+                L, _, snippet = _window(text, s, e, left_chars, right_chars)
                 rel_hit = (s - L, e - L)
                 sub_span = _first_span(sub_pats, snippet) if sub_pats else None
                 neg_span = _first_span(neg_pats, snippet)
@@ -495,10 +756,9 @@ def write_previews_for_item(
         header = not os.path.exists(csv_path)
         pd.DataFrame(rows).to_csv(csv_path, mode=("w" if header else "a"), index=False, header=header)
 
-    return rows  # <<< NEW: return collected preview rows
+    return rows
 
 
-# Legacy/base-only preview (kept for completeness)
 def previews_batch(
     checklist,
     df_summarized,
@@ -510,13 +770,12 @@ def previews_batch(
     csv_path: str | None = None,
 ):
     """
-    Collect preview snippets for items with `preview: True` using the BASE column only.
-    Schema: ['item_key', 'note_id', 'span_start', 'span_end', 'snippet']
-    """
-    import re
-    import sys
+    Generate legacy preview snippets for checklist items with `preview=True`.
 
-    import pandas as pd
+    This helper operates on the base match column only and is retained for
+    compatibility with earlier preview workflows.
+    """
+    import sys
 
     class _Writer:
         def __init__(self, path: str | None):
@@ -572,6 +831,7 @@ def previews_batch(
                 note_id = str(r["note_id"]) if "note_id" in r else None
                 text = r.get("note_text", "") or ""
                 found = False
+
                 for m in _iter_matches(pat, text):
                     s, e = m.span()
                     start = max(0, s - span)
@@ -595,6 +855,7 @@ def previews_batch(
                     )
                     found = True
                     break
+
                 if not found and outfile:
                     tag = f"~~~ {note_id} ~~~" if note_id is not None else "~~~ row ~~~"
                     print(tag)
@@ -610,7 +871,7 @@ def previews_batch(
 
 
 # ============================================================
-# Main extract + gated previews
+# Main extraction pipeline
 # ============================================================
 
 
@@ -625,30 +886,34 @@ def regex_extract(
     preview_span: int = 120,
     preview_csv: str | None = None,
     preview_file: str | None = None,
-    negation_scope: str = "left",  # ← NEW: "left" (default), "right", "both"
-    return_previews: bool = False,  # ← NEW
+    negation_scope: str = "left",
+    return_previews: bool = False,
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
 ):
     """
-    Applies the checklist of regex searches to the data frame, with optional substance and negation checks.
-    Also writes gated previews when `preview: True` on a checklist item.
+    Apply the checklist to the prepared input DataFrame.
 
-    negation_scope controls where negation cues are searched relative to the hit:
-    - "left"  : ONLY to the left (current default behavior)
-    - "right" : ONLY to the right
-    - "both"  : symmetric window on both sides
-    If return_previews=True, returns (metadata_df, previews_df).
+    This function:
+    - computes base regex matches
+    - applies substance and negation gating when configured
+    - applies discharge-context and false-positive pruning when configured
+    - optionally emits previews for checklist items marked with `preview=True`
+
+    The input note text is assumed to have been normalized upstream.
     """
-    # Validate scope early (friendlier error than silent mismatch)
     negation_scope = (negation_scope or "left").lower()
     if negation_scope not in {"left", "right", "both"}:
         raise ValueError("negation_scope must be 'left', 'right', or 'both'")
 
     _dbg(
         f"[DEBUG] Starting regex_extract: df_to_analyze.shape={df_to_analyze.shape}, "
-        f"metadata.shape={metadata.shape}, expected_row_count={expected_row_count}"
+        f"metadata.shape={metadata.shape}, expected_row_count={expected_row_count}, "
+        f"use_parallel={use_parallel}, parallel_backend={parallel_backend}, n_workers={n_workers}"
     )
 
-    previews_acc: list[dict] = []  # NEW: collect preview rows across items
+    previews_acc: list[dict] = []
 
     for i in checklist:
         _dbg(f"\n[DEBUG] Checklist item index: {i}")
@@ -660,25 +925,38 @@ def regex_extract(
         col_name = checklist[i]["col_name"]
         _dbg(f"[DEBUG]  → pattern='{pat.pattern if hasattr(pat, 'pattern') else pat}', col_name='{col_name}'")
 
-        # Treat either 'substance' OR 'opioid' as the gating flag
         has_substance = bool(checklist[i].get("substance") or checklist[i].get("opioid"))
         has_negation = bool(checklist[i].get("negation"))
         _dbg(f"[DEBUG]  → substance={has_substance}, negation={has_negation}")
 
-        # Initial search
         _dbg(f"[DEBUG]  → Calling regex_search_file for '{col_name}'")
-        df_searched = regex_search_file(pat, col_name, df_to_analyze, metadata, preview=True)
+        df_searched = regex_search_file(
+            pat,
+            col_name,
+            df_to_analyze,
+            metadata,
+            preview=True,
+            use_parallel=use_parallel,
+            parallel_backend=parallel_backend,
+            n_workers=n_workers,
+        )
         base_sum = int(pd.to_numeric(df_searched[col_name], errors="coerce").fillna(0).sum())
         _dbg(f"[DEBUG]  → After regex_search_file: df_searched['{col_name}'].sum()={base_sum}")
 
         active_col = col_name
 
-        # substance (+ optional negation) branch
         if has_substance:
             _dbg(f"[DEBUG]  → Entering substance branch for '{col_name}'")
             if base_sum > 0:
                 df_searched = check_for_substance(
-                    pat, col_name, f"{col_name}_SUBSTANCE_MATCHED", df_searched, span=WIN_SUBSTANCE
+                    pat,
+                    col_name,
+                    f"{col_name}_SUBSTANCE_MATCHED",
+                    df_searched,
+                    span=WIN_SUBSTANCE,
+                    use_parallel=use_parallel,
+                    parallel_backend=parallel_backend,
+                    n_workers=n_workers,
                 )
                 active_col = f"{col_name}_SUBSTANCE_MATCHED"
                 sub_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
@@ -695,7 +973,10 @@ def regex_extract(
                             t=[],
                             neg=True,
                             span=WIN_NEGATION,
-                            side=negation_scope,  # ← scope injected here
+                            side=negation_scope,
+                            use_parallel=use_parallel,
+                            parallel_backend=parallel_backend,
+                            n_workers=n_workers,
                         )
                         active_col = f"{active_col}_NEG"
                         neg_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
@@ -713,7 +994,6 @@ def regex_extract(
                     active_col = f"{col_name}_SUBSTANCE_MATCHED"
                 _dbg(f"[DEBUG]    • No initial matches; zeroed {active_col}")
 
-        # negation-only branch
         elif has_negation:
             _dbg(f"[DEBUG]  → Entering negation-only branch for '{col_name}'")
             if base_sum > 0:
@@ -725,7 +1005,10 @@ def regex_extract(
                     t=[],
                     neg=True,
                     span=WIN_NEGATION,
-                    side=negation_scope,  # ← scope injected
+                    side=negation_scope,
+                    use_parallel=use_parallel,
+                    parallel_backend=parallel_backend,
+                    n_workers=n_workers,
                 )
                 active_col = f"{col_name}_NEG"
                 neg_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
@@ -738,7 +1021,6 @@ def regex_extract(
         else:
             _dbg(f"[DEBUG]  → No substance/negation flags for '{col_name}' (base branch)")
 
-        # Pruning policy: prune if negation is present OR there is no substance gate
         should_prune = has_negation or not has_substance
 
         if active_col in df_searched.columns:
@@ -747,18 +1029,36 @@ def regex_extract(
 
             if should_prune and pre_sum > 0:
                 if exclude_discharge_mentions:
-                    df_searched = discharge_instructions(pat, df_searched, active_col, span=WIN_DISCHARGE)
+                    df_searched = discharge_instructions(
+                        pat,
+                        df_searched,
+                        active_col,
+                        span=WIN_DISCHARGE,
+                        use_parallel=use_parallel,
+                        parallel_backend=parallel_backend,
+                        n_workers=n_workers,
+                    )
                     post_dis = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
                     _dbg(f"[DEBUG]    • After discharge_instructions on {active_col}: {post_dis} kept")
 
                 common_fp = checklist[i].get("common_fp") or []
                 if common_fp:
-                    df_searched = check_common_false_positives(pat, df_searched, active_col, common_fp, span=WIN_CFP)
+                    df_searched = check_common_false_positives(
+                        pat,
+                        df_searched,
+                        active_col,
+                        common_fp,
+                        span=WIN_CFP,
+                        use_parallel=use_parallel,
+                        parallel_backend=parallel_backend,
+                        n_workers=n_workers,
+                    )
                     post_fp = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
                     _dbg(f"[DEBUG]    • After common FP pruning on {active_col}: {post_fp} kept")
             else:
                 _dbg(
-                    f"[DEBUG]    • Skipping pruning for {active_col} (matches={pre_sum}, has_substance={has_substance}, has_negation={has_negation})"
+                    f"[DEBUG]    • Skipping pruning for {active_col} "
+                    f"(matches={pre_sum}, has_substance={has_substance}, has_negation={has_negation})"
                 )
         else:
             _dbg(f"[DEBUG]    • Skipping pruning (missing column {active_col})")
@@ -766,17 +1066,16 @@ def regex_extract(
         if active_col not in df_searched.columns:
             df_searched[active_col] = 0
 
-        # -------- PREVIEWS (gated): from final mask --------
         if checklist[i].get("preview"):
             _dbg(f"[DEBUG]  → Writing previews for '{col_name}' from mask '{active_col}'")
             sub_win = WIN_SUBSTANCE if has_substance else 0
             neg_win = WIN_NEGATION if has_negation else 0
-            fp_win = WIN_CFP if (checklist[i].get("common_fp")) else 0
+            fp_win = WIN_CFP if checklist[i].get("common_fp") else 0
             dis_win = WIN_DISCHARGE if exclude_discharge_mentions else 0
             left_req = max(preview_span, sub_win, neg_win, fp_win, dis_win)
             right_req = left_req
 
-            rows = write_previews_for_item(  # NEW: capture rows
+            rows = write_previews_for_item(
                 df_searched=df_searched,
                 item_key=i,
                 pat=pat,
@@ -792,7 +1091,6 @@ def regex_extract(
             if rows:
                 previews_acc.extend(rows)
 
-        # Build merge column set, ensuring active_col is present
         merge_cols = ["note_id", col_name]
         if has_substance:
             merge_cols.append(f"{col_name}_SUBSTANCE_MATCHED")
@@ -813,7 +1111,6 @@ def regex_extract(
 
         metadata = metadata.merge(df_searched[merge_cols], on="note_id", how="left")
 
-    # Final merge for note_text
     metadata = metadata.merge(df_to_analyze[["note_id", "note_text"]], on="note_id", how="left")
     _dbg(f"[DEBUG] Finished regex_extract: metadata.shape={metadata.shape}")
 
@@ -833,35 +1130,44 @@ def regex_extract(
 # ============================================================
 
 
-def regex_search_file(pat, new_col_name, df_to_search, metadata, preview=True):
+def regex_search_file(
+    pat,
+    new_col_name,
+    df_to_search,
+    metadata,
+    preview=True,
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
+):
     """
-    Search the note text in each row for `pat` and count matches into `new_col_name`.
-    Returns a df merged with `metadata` on note_id.
+    Count pattern matches per note and merge the result into the metadata frame.
+
+    The input note text is assumed to have been normalized upstream.
     """
-    from re import Pattern
+    work = df_to_search[["note_id", "note_text"]].copy()
 
-    counts = pd.DataFrame(columns=["note_id", "note_text", new_col_name])
+    pat_payload = _pattern_to_payload(pat)
+    count_func = partial(_count_pattern_matches_from_payload, pat_payload=pat_payload)
 
-    def pat_search(text):
-        if isinstance(pat, Pattern):
-            return len(pat.findall(text))
-        else:
-            return len(re.findall(pat, text, flags=re.IGNORECASE | re.MULTILINE))
-
-    df_to_search["note_text"] = df_to_search["note_text"].apply(remove_line_break)
-    df_to_search[new_col_name] = df_to_search["note_text"].apply(pat_search)
-    counts = pd.concat([counts, df_to_search], sort=True)
+    work[new_col_name] = _apply_series(
+        work["note_text"],
+        count_func,
+        use_parallel=use_parallel,
+        parallel_backend=parallel_backend,
+        n_workers=n_workers,
+    )
 
     keep_cols = ["note_id", new_col_name]
     if preview:
         keep_cols.append("note_text")
 
-    df_searched = metadata.merge(counts[keep_cols], how="left", on="note_id")
+    df_searched = metadata.merge(work[keep_cols], how="left", on="note_id")
     return df_searched
 
 
 # ============================================================
-# Misc redactors
+# Miscellaneous redactors
 # ============================================================
 
 
@@ -875,13 +1181,13 @@ def remove_tobacco_mentions(text):
 
 
 # ============================================================
-# Console preview (legacy)
+# Console preview helper
 # ============================================================
 
 
 def preview_string_matches(pat, col_name, df_searched, col_check=False, n_notes=10, span=100):
     """
-    Console preview: print color-highlighted excerpts for debugging.
+    Print color-highlighted match excerpts for interactive debugging.
     """
     if col_check and col_name not in df_searched.columns:
         raise KeyError(f"Column '{col_name}' not found in df_searched")
@@ -900,25 +1206,23 @@ def preview_string_matches(pat, col_name, df_searched, col_check=False, n_notes=
         text = matches["note_text"].iloc[i]
         for m in _finditer(pat, text):
             start, stop = m.span()
-            L, R, snippet = _window(text, start, stop, span, span)
+            _, _, snippet = _window(text, start, stop, span, span)
 
-            # crude terminal highlight of the hit + any term/neg cues in the snippet
             marked = snippet
-            # hit
             marked = (
                 marked[0:span]
-                + "\x1b[7m"  # inverse
+                + "\x1b[7m"
                 + marked[span : span + (stop - start)]
                 + "\x1b[0m"
                 + marked[span + (stop - start) :]
             )
-            # substance terms
+
             for term in TERMS_LIST:
                 x = re.search(term, marked, flags=re.IGNORECASE | re.MULTILINE)
                 if x:
                     s2, e2 = x.span()
                     marked = marked[:s2] + "\x1b[7m" + marked[s2:e2] + "\x1b[0m" + marked[e2:]
-            # neg cues
+
             for cue in ["no ", "not ", "denies", "denial", "doubt", "never", "negative for"]:
                 x = re.search(cue, marked, flags=re.IGNORECASE | re.MULTILINE)
                 if x:

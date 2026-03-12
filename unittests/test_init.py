@@ -322,7 +322,7 @@ def test_extract_no_header_csv_roundtrip(tmp_path):
         id_column="note_id",
         include_note_text=False,
         remove_linebreaks=False,
-        chunk_size=1,  # ensure we write to out.csv (no _part_0)
+        chunk_size=10,
     )
     assert ok is True
     out_df = pd.read_csv(out_csv)

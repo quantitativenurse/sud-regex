@@ -6,9 +6,8 @@ import sys
 import traceback
 import warnings
 
-from . import __version__, extract, helper  # import extract from package root
-from .validation import import_python_object, parse_text, validate_rows
-
+from . import __version__, extract, helper 
+from .validation import validate_checklist
 
 def main():
     parser = argparse.ArgumentParser(prog="sudregex")
@@ -22,19 +21,36 @@ def main():
     parser.add_argument("--checklist", help="Path to the checklist .py file (must define `checklist`)")
 
     # -------- Extract args --------
-    parser.add_argument("--in_file", help="Path to text file for searching")
-    parser.add_argument("--out_file", help="Path to where results should be exported")
+    parser.add_argument("--in_file", help="Path to the input file to analyze.")
+    parser.add_argument("--out_file", help="Path to the output CSV file.")
     parser.add_argument("--separator", default=",", help="Custom separator (default ',')")
     parser.add_argument("--nrows", type=int, default=None, help="Number of rows to read (default: all)")
     parser.add_argument("--chunk_size", type=int, default=None, help="Rows to analyze per chunk (default: no chunking)")
-    parser.add_argument("--run_tests", action="store_true", help="Run tests (currently unused)")
     parser.add_argument("--terms", type=str, help="Comma-separated list of EXTRA terms (in addition to group)")
     parser.add_argument("--termslist", type=str, help="Path to Python file with term lists")
     parser.add_argument("--terms_active", type=str, help="Comma-separated group names in --termslist to use")
     parser.add_argument("--parallel", action="store_true", help="Enable parallel processing")
+
+    # Parallel backend is now user-selectable. This is how Windows users can
+    # explicitly choose the loky backend instead of pandarallel.
     parser.add_argument(
-        "--n-workers", dest="n_workers", type=int, default=None, help="Number of workers for pandarallel (optional)"
+        "--parallel-backend",
+        dest="parallel_backend",
+        choices=["pandarallel", "loky"],
+        default="pandarallel",
+        help="Parallel backend to use when --parallel is enabled (default: pandarallel).",
     )
+
+    # n_workers is no longer described as pandarallel-only because both
+    # pandarallel and loky now use it.
+    parser.add_argument(
+        "--n-workers",
+        dest="n_workers",
+        type=int,
+        default=None,
+        help="Number of workers for the selected parallel backend (optional).",
+    )
+
     parser.add_argument("--include_note_text", action="store_true", help="Include note text in output CSV")
     parser.add_argument(
         "--preview-count", type=int, default=0, help="Number of preview snippets per matching item (default: 0 = off)"
@@ -57,7 +73,7 @@ def main():
         default=None,
         help="Name of the person identifier column (replaces --grid-column).",
     )
-    parser.add_argument(  # DEPRECATED shim
+    parser.add_argument(
         "--grid-column",
         type=str,
         default=None,
@@ -76,7 +92,6 @@ def main():
         help="Comma-separated list of extra identifier columns to include (e.g., 'station_id,visit_oid,provider_sid').",
     )
 
-    # NEW: negation scope
     parser.add_argument(
         "--negation-scope",
         choices=["left", "right", "both"],
@@ -170,7 +185,6 @@ def main():
                 print(f"[ERROR] Checklist file not found: {args.checklist}", file=sys.stderr)
                 sys.exit(1)
 
-            # Tidy terms (trim + drop empties)
             terms_list = [t.strip() for t in args.terms.split(",") if t.strip()] if args.terms else None
 
             if args.debug:
@@ -178,7 +192,9 @@ def main():
                     f"[DEBUG] negation_scope={args.negation_scope}, "
                     f"exclude_discharge={args.exclude_discharge_mentions}, "
                     f"preview_count={args.preview_count}, preview_span={args.preview_span}, "
-                    f"has_header={args.has_header}, columns={args.columns}"
+                    f"has_header={args.has_header}, columns={args.columns}, "
+                    f"parallel={args.parallel}, parallel_backend={args.parallel_backend}, "
+                    f"n_workers={args.n_workers}"
                 )
 
             # Build identifier kwargs only when provided to avoid overriding defaults with None
@@ -190,7 +206,6 @@ def main():
             if extra_id_cols:
                 id_kwargs["extra_id_columns"] = extra_id_cols
 
-            # Build no-header columns list
             no_header_cols = [c.strip() for c in args.columns.split(",")] if args.columns else None
 
             extract(
@@ -202,6 +217,7 @@ def main():
                 termslist=args.termslist,
                 terms_active=args.terms_active,
                 parallel=args.parallel,
+                parallel_backend=args.parallel_backend,  
                 n_workers=args.n_workers,
                 include_note_text=args.include_note_text,
                 nrows=args.nrows,
@@ -213,9 +229,9 @@ def main():
                 preview_file=args.preview_file,
                 preview_csv=args.preview_csv,
                 negation_scope=args.negation_scope,
-                has_header=args.has_header,  # NEW
-                no_header_columns=no_header_cols,  # NEW
-                **id_kwargs,  # identifiers (person/note/extra)
+                has_header=args.has_header,
+                no_header_columns=no_header_cols,
+                **id_kwargs,
             )
             return
 
@@ -231,9 +247,11 @@ def main():
                 print(f"[ERROR] Examples file not found: {args.examples}", file=sys.stderr)
                 sys.exit(1)
 
-            checklist = import_python_object(args.checklist, "checklist")
-            df_examples = parse_text(args.examples)
-            detailed, by_item = validate_rows(checklist, df_examples)
+
+            detailed, by_item = validate_checklist(
+                    checklist=args.checklist,
+                    examples=args.examples,
+                )
 
             detailed.to_csv(args.val_out, index=False)
             by_item.to_csv(args.val_by_item, index=False)
