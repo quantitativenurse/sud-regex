@@ -6,8 +6,9 @@ import sys
 import traceback
 import warnings
 
-from . import __version__, extract, helper 
+from . import __version__, extract, helper
 from .validation import validate_checklist
+
 
 def main():
     parser = argparse.ArgumentParser(prog="sudregex")
@@ -217,7 +218,7 @@ def main():
                 termslist=args.termslist,
                 terms_active=args.terms_active,
                 parallel=args.parallel,
-                parallel_backend=args.parallel_backend,  
+                parallel_backend=args.parallel_backend,
                 n_workers=args.n_workers,
                 include_note_text=args.include_note_text,
                 nrows=args.nrows,
@@ -247,11 +248,10 @@ def main():
                 print(f"[ERROR] Examples file not found: {args.examples}", file=sys.stderr)
                 sys.exit(1)
 
-
             detailed, by_item = validate_checklist(
-                    checklist=args.checklist,
-                    examples=args.examples,
-                )
+                checklist=args.checklist,
+                examples=args.examples,
+            )
 
             detailed.to_csv(args.val_out, index=False)
             by_item.to_csv(args.val_by_item, index=False)
