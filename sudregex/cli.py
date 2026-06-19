@@ -7,7 +7,7 @@ import traceback
 import warnings
 
 from . import __version__, extract, helper
-from .validation import validate_checklist
+from .validation import validate_pattern_library
 
 
 def main():
@@ -17,9 +17,20 @@ def main():
     # Modes
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--extract", action="store_true", help="Perform regular expression extraction")
-    mode.add_argument("--validate", action="store_true", help="Validate a checklist against labeled examples")
+    mode.add_argument("--validate", action="store_true", help="Validate a pattern library against labeled examples")
 
-    parser.add_argument("--checklist", help="Path to the checklist .py file (must define `checklist`)")
+    parser.add_argument(
+        "--pattern-library",
+        dest="pattern_library",
+        help="Path to the pattern library .py file (must define `pattern_library`)",
+    )
+    # DEPRECATED alias for --pattern-library
+    parser.add_argument(
+        "--checklist",
+        dest="checklist",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
 
     # -------- Extract args --------
     parser.add_argument("--in_file", help="Path to the input file to analyze.")
@@ -141,13 +152,13 @@ def main():
     )
     parser.add_argument(
         "--val_out",
-        default="checklist_validation_results.csv",
-        help="Detailed rows CSV (default: checklist_validation_results.csv)",
+        default="pattern_library_validation_results.csv",
+        help="Detailed rows CSV (default: pattern_library_validation_results.csv)",
     )
     parser.add_argument(
         "--val_by_item",
-        default="checklist_validation_by_item.csv",
-        help="Per-item summary CSV (default: checklist_validation_by_item.csv)",
+        default="pattern_library_validation_by_item.csv",
+        help="Per-item summary CSV (default: pattern_library_validation_by_item.csv)",
     )
     parser.add_argument("--print_mismatches", action="store_true", help="Print mismatched rows to stdout")
     parser.add_argument("--mismatch_limit", type=int, default=20, help="Max mismatches to print (default: 20)")
@@ -157,6 +168,11 @@ def main():
 
     args = parser.parse_args()
     helper.PRINT = args.debug
+
+    # --- deprecation shim: --checklist -> --pattern-library ---
+    if args.checklist and not args.pattern_library:
+        warnings.warn("--checklist is deprecated; use --pattern-library instead.", DeprecationWarning)
+        args.pattern_library = args.checklist
 
     # --- normalize identifier args + deprecation shim ---
     if args.grid_column and not args.person_column:
@@ -174,16 +190,16 @@ def main():
     try:
         if args.extract:
             # Required args
-            if not args.in_file or not args.out_file or not args.checklist:
-                print("[ERROR] --in_file, --out_file, and --checklist are required for --extract.")
+            if not args.in_file or not args.out_file or not args.pattern_library:
+                print("[ERROR] --in_file, --out_file, and --pattern-library are required for --extract.")
                 sys.exit(1)
 
             # Early file checks (friendlier errors)
             if not os.path.exists(args.in_file):
                 print(f"[ERROR] Input file not found: {args.in_file}", file=sys.stderr)
                 sys.exit(1)
-            if not os.path.exists(args.checklist):
-                print(f"[ERROR] Checklist file not found: {args.checklist}", file=sys.stderr)
+            if not os.path.exists(args.pattern_library):
+                print(f"[ERROR] Pattern library file not found: {args.pattern_library}", file=sys.stderr)
                 sys.exit(1)
 
             terms_list = [t.strip() for t in args.terms.split(",") if t.strip()] if args.terms else None
@@ -212,7 +228,7 @@ def main():
             extract(
                 in_file=args.in_file,
                 out_file=args.out_file,
-                checklist=args.checklist,
+                pattern_library=args.pattern_library,
                 separator=args.separator or "",
                 terms=terms_list,
                 termslist=args.termslist,
@@ -237,19 +253,19 @@ def main():
             return
 
         if args.validate:
-            if not args.checklist or not args.examples:
-                print("[ERROR] --checklist and --examples are required for --validate.")
+            if not args.pattern_library or not args.examples:
+                print("[ERROR] --pattern-library and --examples are required for --validate.")
                 sys.exit(1)
 
-            if not os.path.exists(args.checklist):
-                print(f"[ERROR] Checklist file not found: {args.checklist}", file=sys.stderr)
+            if not os.path.exists(args.pattern_library):
+                print(f"[ERROR] Pattern library file not found: {args.pattern_library}", file=sys.stderr)
                 sys.exit(1)
             if not os.path.exists(args.examples):
                 print(f"[ERROR] Examples file not found: {args.examples}", file=sys.stderr)
                 sys.exit(1)
 
-            detailed, by_item = validate_checklist(
-                checklist=args.checklist,
+            detailed, by_item = validate_pattern_library(
+                pattern_library=args.pattern_library,
                 examples=args.examples,
             )
 

@@ -47,8 +47,8 @@ def _helper_negation(text: str, span: Tuple[int, int], left_chars: int = 65) -> 
 # ---------------- Loaders ----------------
 
 
-def import_python_object(file_path: str, varname: str = "checklist"):
-    """Import a variable (e.g., checklist) from a Python file."""
+def import_python_object(file_path: str, varname: str = "pattern_library"):
+    """Import a variable (e.g., pattern_library) from a Python file."""
     import os
 
     module_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -64,8 +64,8 @@ def import_python_object(file_path: str, varname: str = "checklist"):
 
 def _compile_pattern(raw_pat):
     """
-    Compile the checklist pattern exactly as provided.
-    No auto-fixes (we validate the checklist 'as-is').
+    Compile the pattern library pattern exactly as provided.
+    No auto-fixes (we validate the pattern library 'as-is').
     """
     if hasattr(raw_pat, "pattern"):  # already compiled
         return raw_pat
@@ -83,7 +83,7 @@ def parse_text(path: str) -> pd.DataFrame:
 
     Notes:
       - expected must be '0' or '1'
-      - item_key must match keys in the checklist (e.g., '1a', '10', '11b')
+      - item_key must match keys in the pattern library (e.g., '1a', '10', '11b')
     """
     rows: List[Dict[str, Any]] = []
 
@@ -115,7 +115,7 @@ def parse_text(path: str) -> pd.DataFrame:
             rows.append(
                 dict(
                     item_code=item_key,  # keep 'item_code' for detailed output compatibility
-                    item_key=item_key,  # used to look up the checklist pattern
+                    item_key=item_key,  # used to look up the pattern library pattern
                     expected=expected,
                     note_text=note_text,
                 )
@@ -199,7 +199,7 @@ def _make_snippet(text: str, s: int, e: int, left_chars: int, right_chars: int) 
 
 
 def validate_rows(
-    checklist: Dict[str, Any],
+    pattern_library: Dict[str, Any],
     df: pd.DataFrame,
     negation_fn: Optional[NegationFn] = None,
     fp_window_chars: int = 120,  # context window for common_fp checks
@@ -210,7 +210,7 @@ def validate_rows(
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
     """
     Negation-aware, common_fp-aware, and (optionally) substance-gated validator.
-    Optionally collects preview snippets for items with `preview: True` in checklist.
+    Optionally collects preview snippets for items with `preview: True` in the pattern library.
 
     Negation behavior: matches helper.check_negation (LEFT-ONLY, 65 chars by default).
     Returns (detailed_out, by_item, previews_df) where previews_df may be None.
@@ -226,7 +226,7 @@ def validate_rows(
     item_cfg: Dict[str, Dict[str, Any]] = {}  # key -> dict with flags + compiled fp
     any_item_has_common_fp = False
     any_item_needs_substance = False
-    for key, obj in checklist.items():
+    for key, obj in pattern_library.items():
         pat = _compile_pattern(obj["pat"])
         fps = _compile_common_fp(obj.get("common_fp"))
         needs_sub = bool(obj.get("substance") or obj.get("opioid"))
@@ -459,10 +459,18 @@ def validate_rows(
         )
         .reset_index()
     )
-    by_item["precision"] = by_item["tp"] / (by_item["tp"] + by_item["fp"]).replace(0, pd.NA)
-    by_item["recall"] = by_item["tp"] / (by_item["tp"] + by_item["fn"]).replace(0, pd.NA)
-    by_item["f1"] = (2 * by_item["precision"] * by_item["recall"]) / (by_item["precision"] + by_item["recall"])
-
+    denom_p = (by_item["tp"] + by_item["fp"]).astype(float)
+    denom_r = (by_item["tp"] + by_item["fn"]).astype(float)
+    by_item["precision"] = by_item["tp"].astype(float).where(denom_p > 0, other=float("nan")) / denom_p.where(
+        denom_p > 0, other=1
+    )
+    by_item["recall"] = by_item["tp"].astype(float).where(denom_r > 0, other=float("nan")) / denom_r.where(
+        denom_r > 0, other=1
+    )
+    denom_f1 = by_item["precision"] + by_item["recall"]
+    by_item["f1"] = (2 * by_item["precision"] * by_item["recall"]).where(
+        denom_f1 > 0, other=float("nan")
+    ) / denom_f1.where(denom_f1 > 0, other=1)
     # overall totals
     total_n = int(work["item_key"].size)
     total_tp = int(work["tp"].sum())
@@ -494,8 +502,8 @@ def validate_rows(
 # ---------------- Public API ----------------
 
 
-def validate_checklist(
-    checklist: Union[str, Dict[str, Any]],
+def validate_pattern_library(
+    pattern_library: Union[str, Dict[str, Any]],
     examples: Union[str, pd.DataFrame],
     out_csv: str | None = None,
     by_item_csv: str | None = None,
@@ -512,7 +520,7 @@ def validate_checklist(
 
     Parameters
     ----------
-    checklist : path to checklist.py OR a dict loaded by caller
+    pattern_library : path to pattern_library.py OR a dict loaded by caller
     examples  : path to examples file OR a DataFrame with columns:
                 - item_key | expected | note_text   (or item_code instead of item_key)
                 expected must be 0/1; optional `note_id` will be preserved in outputs.
@@ -522,13 +530,13 @@ def validate_checklist(
                  If not provided, a helper-style LEFT-ONLY 65-char window is used.
     fp_window_chars: character window around a hit to check `common_fp` (default 120).
     substance_terms: list of vocab strings to require near hits for items that
-                     set `opioid: True` or `substance: True` in the checklist.
+                     set `opioid: True` or `substance: True` in the pattern library.
     substance_window_chars: context window around hit for substance vocab (default 120).
     return_previews: if True, return a third DataFrame of preview snippets for items with preview=True.
     previews_csv: optional path to write previews CSV when return_previews=True.
     """
-    if isinstance(checklist, str):
-        checklist = import_python_object(checklist, "checklist")
+    if isinstance(pattern_library, str):
+        pattern_library = import_python_object(pattern_library, "pattern_library")
 
     if isinstance(examples, str):
         df = parse_text(examples)
@@ -547,7 +555,7 @@ def validate_checklist(
             df["item_code"] = df["item_key"]
 
     detailed, by_item, previews = validate_rows(
-        checklist,
+        pattern_library,
         df,
         negation_fn=negation_fn or _helper_negation,  # ensure helper-style default
         fp_window_chars=fp_window_chars,
@@ -566,3 +574,9 @@ def validate_checklist(
         return detailed, by_item, previews
 
     return detailed, by_item
+
+
+# ---------------- Backward-compatibility alias ----------------
+# Deprecated: `validate_checklist` is retained as an alias for
+# `validate_pattern_library` so existing callers keep working.
+validate_checklist = validate_pattern_library

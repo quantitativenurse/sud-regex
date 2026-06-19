@@ -306,20 +306,21 @@ def _gate_by_terms_row(
     """
     Evaluate a single row for term-based gating.
 
-    Returns 1 when the row passes the configured gate policy, otherwise 0.
+    Returns the number of matches that pass the configured gate policy.
     """
     pat = _compile_payload(pat_payload)
     term_pats = [_compile_payload(payload) for payload in term_payloads]
 
+    count = 0
     for m in pat.finditer(text):
         s, e = m.span()
         _, _, ctx = _window(text, s, e, left_chars, right_chars)
         found = any(p.search(ctx) for p in term_pats) if term_pats else False
         if policy == "require" and found:
-            return 1
-        if policy == "exclude" and not found:
-            return 1
-    return 0
+            count += 1
+        elif policy == "exclude" and not found:
+            count += 1
+    return count
 
 
 def _gate_by_cues_row(
@@ -333,19 +334,20 @@ def _gate_by_cues_row(
     """
     Evaluate a single row for cue-based gating.
 
-    Returns 1 when the row is not negated within the requested window, otherwise 0.
+    Returns the number of matches that are not negated within the requested window.
     """
     pat = _compile_payload(pat_payload)
     cue_pats = [_compile_payload(payload) for payload in cue_payloads]
 
+    count = 0
     for m in pat.finditer(text):
         s, e = m.span()
         L, _, ctx = _window(text, s, e, left_chars, right_chars)
         left = ctx[: s - L]
         right = ctx[e - L :]
         if not any(p.search(left) for p in cue_pats) and not any(p.search(right) for p in cue_pats):
-            return 1
-    return 0
+            count += 1
+    return count
 
 
 # ============================================================
@@ -759,7 +761,7 @@ def write_previews_for_item(
 
 
 def previews_batch(
-    checklist,
+    pattern_library,
     df_summarized,
     n_notes: int = 2,
     span: int = 300,
@@ -769,7 +771,7 @@ def previews_batch(
     csv_path: str | None = None,
 ):
     """
-    Generate legacy preview snippets for checklist items with `preview=True`.
+    Generate legacy preview snippets for pattern library items with `preview=True`.
 
     This helper operates on the base match column only and is retained for
     compatibility with earlier preview workflows.
@@ -808,7 +810,7 @@ def previews_batch(
         return re.finditer(pat, text, flags=re.IGNORECASE | re.MULTILINE)
 
     with _Writer(outfile):
-        for item_key, cfg in checklist.items():
+        for item_key, cfg in pattern_library.items():
             if not cfg.get("preview"):
                 continue
 
@@ -875,7 +877,7 @@ def previews_batch(
 
 
 def regex_extract(
-    checklist,
+    pattern_library,
     df_to_analyze,
     metadata,
     preview_count,
@@ -892,13 +894,13 @@ def regex_extract(
     n_workers: int | None = None,
 ):
     """
-    Apply the checklist to the prepared input DataFrame.
+    Apply the pattern library to the prepared input DataFrame.
 
     This function:
     - computes base regex matches
     - applies substance and negation gating when configured
     - applies discharge-context and false-positive pruning when configured
-    - optionally emits previews for checklist items marked with `preview=True`
+    - optionally emits previews for pattern library items marked with `preview=True`
 
     The input note text is assumed to have been normalized upstream.
     """
@@ -914,18 +916,18 @@ def regex_extract(
 
     previews_acc: list[dict] = []
 
-    for i in checklist:
-        _dbg(f"\n[DEBUG] Checklist item index: {i}")
+    for i in pattern_library:
+        _dbg(f"\n[DEBUG] Pattern library item index: {i}")
         actual_rows = df_to_analyze.shape[0]
         _dbg(f"[DEBUG]  → df_to_analyze has {actual_rows} rows")
         assert actual_rows == expected_row_count, f"Row counts do not match ({actual_rows} != {expected_row_count})"
 
-        pat = checklist[i]["pat"]
-        col_name = checklist[i]["col_name"]
+        pat = pattern_library[i]["pat"]
+        col_name = pattern_library[i]["col_name"]
         _dbg(f"[DEBUG]  → pattern='{pat.pattern if hasattr(pat, 'pattern') else pat}', col_name='{col_name}'")
 
-        has_substance = bool(checklist[i].get("substance") or checklist[i].get("opioid"))
-        has_negation = bool(checklist[i].get("negation"))
+        has_substance = bool(pattern_library[i].get("substance") or pattern_library[i].get("opioid"))
+        has_negation = bool(pattern_library[i].get("negation"))
         _dbg(f"[DEBUG]  → substance={has_substance}, negation={has_negation}")
 
         _dbg(f"[DEBUG]  → Calling regex_search_file for '{col_name}'")
@@ -1040,7 +1042,7 @@ def regex_extract(
                     post_dis = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
                     _dbg(f"[DEBUG]    • After discharge_instructions on {active_col}: {post_dis} kept")
 
-                common_fp = checklist[i].get("common_fp") or []
+                common_fp = pattern_library[i].get("common_fp") or []
                 if common_fp:
                     df_searched = check_common_false_positives(
                         pat,
@@ -1065,11 +1067,11 @@ def regex_extract(
         if active_col not in df_searched.columns:
             df_searched[active_col] = 0
 
-        if checklist[i].get("preview"):
+        if pattern_library[i].get("preview"):
             _dbg(f"[DEBUG]  → Writing previews for '{col_name}' from mask '{active_col}'")
             sub_win = WIN_SUBSTANCE if has_substance else 0
             neg_win = WIN_NEGATION if has_negation else 0
-            fp_win = WIN_CFP if checklist[i].get("common_fp") else 0
+            fp_win = WIN_CFP if pattern_library[i].get("common_fp") else 0
             dis_win = WIN_DISCHARGE if exclude_discharge_mentions else 0
             left_req = max(preview_span, sub_win, neg_win, fp_win, dis_win)
             right_req = left_req

@@ -263,7 +263,7 @@ def test_validate_checklist_examples_file_input(tmp_path):
     chk_file = tmp_path / "chk.py"
     chk_file.write_text(
         "import re\n"
-        "checklist = {\n"
+        "pattern_library = {\n"
         "    'foo_chk': {\n"
         "        'pat': re.compile(r'\\bfoo\\b'),\n"
         "        'col_name': 'foo_chk',\n"
@@ -323,3 +323,36 @@ def test_validate_checklist_return_previews_and_write_csvs(tmp_path):
     assert previews_csv.exists()
     assert not previews.empty
     assert detailed["actual_match"].iloc[0] == 1
+
+
+def test_validate_rows_zero_denominator_no_crash():
+    """Items with no positives or no predicted positives should return NaN, not crash."""
+    checklist = {
+        "foo_chk": {
+            "pat": re.compile(r"\bfoo\b"),
+            "col_name": "foo_chk",
+            "negation": False,
+            "substance": False,
+            "preview": False,
+        },
+        "bar_chk": {
+            "pat": re.compile(r"\bbar\b"),
+            "col_name": "bar_chk",
+            "negation": False,
+            "substance": False,
+            "preview": False,
+        },
+    }
+    df = pd.DataFrame([
+        {"item_key": "foo_chk", "item_code": "foo_chk", "expected": 0, "note_text": "patient has foo"},
+        {"item_key": "bar_chk", "item_code": "bar_chk", "expected": 0, "note_text": "nothing here"},
+    ])
+
+    detailed, by_item, _ = validate_rows(checklist, df)
+
+    foo_row = by_item[by_item["item_key"] == "foo_chk"].iloc[0]
+    bar_row = by_item[by_item["item_key"] == "bar_chk"].iloc[0]
+
+    assert pd.isna(foo_row["recall"])
+    assert pd.isna(bar_row["precision"])
+    assert pd.isna(bar_row["recall"])

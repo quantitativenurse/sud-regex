@@ -196,7 +196,7 @@ def test_extract_file_matches_extract_df(tmp_path):
     chk_file = tmp_path / "chk.py"
     chk_file.write_text(
         "import re\n"
-        "checklist = {\n"
+        "pattern_library = {\n"
         "    'foo_chk': {\n"
         "        'pat': re.compile(r'\\bfoo\\b'),\n"
         "        'col_name': 'foo_chk',\n"
@@ -223,7 +223,7 @@ def test_extract_file_matches_extract_df(tmp_path):
     ok = sudregex.extract(
         in_file=str(in_file),
         out_file=str(out_file),
-        checklist=str(chk_file),
+        pattern_library=str(chk_file),
         separator=",",
         terms=["__dummy__"],
         person_column="patient_id",

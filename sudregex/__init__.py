@@ -14,10 +14,10 @@ from typing import List, Optional, Tuple, Union
 import pandas as pd
 
 from . import helper as _helper
-from .checklist import checklist as checklist_abc
+from .pattern_library import pattern_library as pattern_library_abc
 from .termslist import termslist as default_termslist
 from .validation import import_python_object as _import_python_object
-from .validation import validate_checklist as validation
+from .validation import validate_pattern_library as validation
 
 __all__ = [
     "__version__",
@@ -33,7 +33,7 @@ __all__ = [
     "discharge_instructions",
     "preview_string_matches",
     "previews_batch",
-    "checklist_abc",
+    "pattern_library_abc",
     "default_termslist",
     "validation",
     "write_previews_for_item",
@@ -138,22 +138,26 @@ def _normalize_identifier_args(
     return id_column, person_column, extra_id_columns
 
 
-def _resolve_checklist(checklist, keys=None):
+def _resolve_pattern_library(pattern_library, keys=None):
     """
-    Resolve a checklist object from either a Python object or a file path.
+    Resolve a pattern library object from either a Python object or a file path.
 
-    If `keys` is provided, return only the requested checklist entries that are
-    present in the resolved checklist.
+    If `keys` is provided, return only the requested pattern library entries that are
+    present in the resolved pattern library.
     """
-    checklist_obj = _import_python_object(checklist, "checklist") if isinstance(checklist, str) else checklist
+    pattern_library_obj = (
+        _import_python_object(pattern_library, "pattern_library")
+        if isinstance(pattern_library, str)
+        else pattern_library
+    )
     if keys:
-        checklist_obj = {k: checklist_obj[k] for k in keys if k in checklist_obj}
-    return checklist_obj
+        pattern_library_obj = {k: pattern_library_obj[k] for k in keys if k in pattern_library_obj}
+    return pattern_library_obj
 
 
 def _initialize_runtime(
     *,
-    checklist,
+    pattern_library,
     terms,
     termslist,
     terms_active,
@@ -165,17 +169,17 @@ def _initialize_runtime(
 
     Responsibilities:
     - set helper debug mode
-    - resolve the checklist
+    - resolve the pattern library
     - build the active vocabulary
     - register terms with the helper layer
     """
     hlp = _helper
     hlp.PRINT = debug
 
-    checklist_obj = _resolve_checklist(checklist, keys=keys)
+    pattern_library_obj = _resolve_pattern_library(pattern_library, keys=keys)
     terms_list = _build_terms(terms=terms, termslist=termslist, terms_active=terms_active)
     hlp.set_terms(terms_list)
-    return checklist_obj
+    return pattern_library_obj
 
 
 def _init_parallel(
@@ -517,7 +521,7 @@ def _prepare_grouped_input(
 
 def _run_grouped_extraction(
     *,
-    checklist_obj,
+    pattern_library_obj,
     grouped: pd.DataFrame,
     meta: pd.DataFrame,
     expected: int,
@@ -540,7 +544,7 @@ def _run_grouped_extraction(
     """
     if return_previews_df:
         return _helper.regex_extract(
-            checklist=checklist_obj,
+            pattern_library=pattern_library_obj,
             df_to_analyze=grouped,
             metadata=meta,
             preview_count=preview_count,
@@ -557,7 +561,7 @@ def _run_grouped_extraction(
         )
 
     res = _helper.regex_extract(
-        checklist=checklist_obj,
+        pattern_library=pattern_library_obj,
         df_to_analyze=grouped,
         metadata=meta,
         preview_count=preview_count,
@@ -643,7 +647,7 @@ def _finalize_previews(
 def extract(
     in_file,
     out_file,
-    checklist,
+    pattern_library,
     separator="",
     terms=None,
     termslist=None,
@@ -693,8 +697,8 @@ def extract(
         extra_id_columns=extra_id_columns,
     )
 
-    checklist_obj = _initialize_runtime(
-        checklist=checklist,
+    pattern_library_obj = _initialize_runtime(
+        pattern_library=pattern_library,
         terms=terms,
         termslist=termslist,
         terms_active=terms_active,
@@ -751,7 +755,7 @@ def extract(
         )
 
         res, _ = _run_grouped_extraction(
-            checklist_obj=checklist_obj,
+            pattern_library_obj=pattern_library_obj,
             grouped=prepared["grouped"],
             meta=prepared["meta"],
             expected=prepared["expected"],
@@ -803,7 +807,7 @@ def extract(
 
 def extract_df(
     df,
-    checklist,
+    pattern_library,
     note_column="note_text",
     terms=None,
     termslist=None,
@@ -834,8 +838,8 @@ def extract_df(
     pipeline as `extract()`, so notebook and file-based workflows remain
     behaviorally aligned.
     """
-    checklist_obj = _initialize_runtime(
-        checklist=checklist,
+    pattern_library_obj = _initialize_runtime(
+        pattern_library=pattern_library,
         terms=terms,
         termslist=termslist,
         terms_active=terms_active,
@@ -871,7 +875,7 @@ def extract_df(
     )
 
     res, previews_df = _run_grouped_extraction(
-        checklist_obj=checklist_obj,
+        pattern_library_obj=pattern_library_obj,
         grouped=prepared["grouped"],
         meta=prepared["meta"],
         expected=prepared["expected"],
