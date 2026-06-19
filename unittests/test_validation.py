@@ -343,10 +343,12 @@ def test_validate_rows_zero_denominator_no_crash():
             "preview": False,
         },
     }
-    df = pd.DataFrame([
-        {"item_key": "foo_chk", "item_code": "foo_chk", "expected": 0, "note_text": "patient has foo"},
-        {"item_key": "bar_chk", "item_code": "bar_chk", "expected": 0, "note_text": "nothing here"},
-    ])
+    df = pd.DataFrame(
+        [
+            {"item_key": "foo_chk", "item_code": "foo_chk", "expected": 0, "note_text": "patient has foo"},
+            {"item_key": "bar_chk", "item_code": "bar_chk", "expected": 0, "note_text": "nothing here"},
+        ]
+    )
 
     detailed, by_item, _ = validate_rows(checklist, df)
 
