@@ -432,12 +432,8 @@ def test_run_sudregex_environment_case_insensitive():
     df = pd.DataFrame({"note_id": ["1"], "note_text": ["foo"]})
     checklist = _mk_checklist()
 
-    out_lower = sudregex.run_sudregex(
-        df, checklist, environment="local", terms=["__dummy__"], remove_linebreaks=False
-    )
-    out_upper = sudregex.run_sudregex(
-        df, checklist, environment="LOCAL", terms=["__dummy__"], remove_linebreaks=False
-    )
+    out_lower = sudregex.run_sudregex(df, checklist, environment="local", terms=["__dummy__"], remove_linebreaks=False)
+    out_upper = sudregex.run_sudregex(df, checklist, environment="LOCAL", terms=["__dummy__"], remove_linebreaks=False)
 
     pd.testing.assert_frame_equal(out_lower.reset_index(drop=True), out_upper.reset_index(drop=True))
 
