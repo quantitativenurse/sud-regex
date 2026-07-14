@@ -5,7 +5,7 @@
 
 # sudregex
 
-> **Version:** 0.1.7
+> **Version:** 0.1.8
 
 A lightweight, high-throughput pipeline for regex-driven extraction with negation and false-positive pruning. Developed for Substance Use Disorder (SUD) research, but the core extraction workflow is flexible enough for broader clinical text mining use cases.
 
@@ -23,6 +23,7 @@ A lightweight, high-throughput pipeline for regex-driven extraction with negatio
 - **Packaged defaults** including an ABC pattern library and grouped term lists
 - **CLI and Python APIs** for shell workflows and notebook use
 - **Multiple parallel backends** with support for `pandarallel` and `loky`
+- **Distributed Databricks/Spark execution** via `run_sudregex(..., environment="databricks")`, using the same extraction logic as the local pandas path
 - **Python 3.9–3.13 compatible**
 
 ---
@@ -34,6 +35,22 @@ A lightweight, high-throughput pipeline for regex-driven extraction with negatio
 ```bash
 pip install sudregex
 ```
+
+To upgrade an existing installation:
+
+```bash
+pip install --upgrade sudregex
+```
+
+For Databricks or Spark execution, install the optional `spark` extra:
+
+```bash
+pip install "sudregex[spark]"
+```
+
+This installs `pyspark>=3.4` and `pyarrow>=15.0`. PySpark is only imported when the Databricks execution path is actually used — local pandas execution (`extract()`, `extract_df()`, and `run_sudregex(..., environment="local")`, the default) never requires PySpark, Java, or a Databricks environment.
+
+PySpark comes pre-installed on Databricks clusters. If you want to test the Databricks path locally, install the `spark` extra above (or a compatible PySpark version directly) plus a working Java 17+ runtime.
 
 ### From source
 
@@ -47,6 +64,12 @@ pip install -e .[dev]
 ```
 
 This installs `sudregex` along with development tools: `black`, `isort`, `flake8`, and `pytest`.
+
+For development and testing including the Spark path:
+
+```bash
+pip install -e ".[dev,spark]"
+```
 
 ### Windows setup
 
@@ -409,7 +432,133 @@ results_part_2.csv
 
 ---
 
+## Databricks / Spark execution
+
+Version 0.1.8 adds a distributed execution path for Databricks and Apache Spark through a new public entry point, `run_sudregex()`. It runs the exact same pandas-based extraction logic (`extract_df()` internally) across Spark partitions via `mapInPandas`, rather than maintaining a second, separate matching engine — so local and distributed results stay consistent by construction.
+
+### New public API
+
+```python
+run_sudregex(
+    notes,
+    pattern_library,
+    environment="local",
+    spark=None,
+    **kwargs,
+)
+```
+
+- `notes` — a pandas DataFrame (local execution), or a pandas or Spark DataFrame (Databricks execution)
+- `pattern_library` — same format accepted by `extract_df()`
+- `environment` — `"local"` (default) or `"databricks"`
+- `spark` — the active `SparkSession`; required when `environment="databricks"`, ignored for local execution
+- `**kwargs` — forwarded to the existing extraction behavior (term lists, identifier columns, text normalization, gating, negation settings)
+
+An unsupported `environment` value raises a `ValueError`. Selecting `"databricks"` without passing a `SparkSession` also raises a clear `ValueError`.
+
+### Local usage
+
+Existing code calling `extract_df()` directly needs no changes — nothing about the local pandas path was modified in this release. The new wrapper simply defaults to that same path:
+
+```python
+import sudregex as sud
+
+# Existing call — unchanged
+result_df = sud.extract_df(
+    my_notes_df,
+    sud.pattern_library_abc,
+    terms=sud.default_termslist["opioid_terms"],
+)
+
+# Equivalent via the new wrapper
+result_df = sud.run_sudregex(
+    my_notes_df,
+    sud.pattern_library_abc,
+    terms=sud.default_termslist["opioid_terms"],
+)
+```
+
+`run_sudregex(notes, library, environment="local", **kwargs)` is designed to produce the same result as calling `extract_df(notes, library, **kwargs)` directly.
+
+### Databricks usage
+
+```python
+from pyspark.sql import SparkSession
+import sudregex
+
+spark = SparkSession.builder.getOrCreate()
+
+results = sudregex.run_sudregex(
+    notes_sdf,
+    sudregex.pattern_library_abc,
+    environment="databricks",
+    spark=spark,
+)
+```
+
+`results` is a **Spark DataFrame** — it can be filtered, joined, written, or aggregated without collecting the full result to the driver first. A pandas DataFrame is also accepted as input on the Databricks path and will be converted internally.
+
+### Distributed execution behavior
+
+- Input is pre-aggregated to one row per `note_id` before distribution, so a single note is never split across two Arrow batches (`aggregate_notes=True` by default; pass `aggregate_notes=False` to instead raise a `ValueError` if duplicate `note_id`s are detected).
+- Worker-level extraction forces `parallel=False` — Spark already provides the outer parallelism, so a second multiprocessing layer inside each partition is deliberately avoided.
+- The output schema is generated dynamically from the active pattern library, not hard-coded:
+  - Identifier columns use Spark `StringType`
+  - Match-count columns use Spark `LongType`
+  - Every column is a match **count**, matching local behavior — never a boolean flag
+- For the packaged ABC pattern library (27 entries), this produces 69 output count columns: 27 raw-match columns, 22 substance-gated columns (of which 17 also carry the negation gate), and 3 negation-only columns.
+
+### Preview behavior
+
+Preview generation (`preview_count`, `preview_file`, `preview_csv`) is **not** produced on the distributed Spark path — preview collection is driver-oriented and can be expensive to pull off a large cluster job. Generate previews from the local path on a bounded sample instead.
+
+### Backward compatibility
+
+- `extract()` is unchanged.
+- `extract_df()` is unchanged.
+- `run_sudregex()` defaults to local execution and is equivalent to calling `extract_df()` directly.
+- Existing local users do not need PySpark, Java, or a Databricks environment — PySpark is only imported inside the functions that need it.
+- Existing pattern libraries, term lists, gating options, negation behavior, and match-count output semantics are all preserved.
+
+### Testing
+
+Spark support is covered by `unittests/test_spark.py` (17 tests):
+
+- Output column-naming logic (`expected_count_columns`, `output_columns`) verified against hand-built libraries and cross-checked against the real ABC `pattern_library`.
+- Spark schema generation (`build_spark_schema`), including loading a pattern library from a file path.
+- Error handling: missing `SparkSession`, wrong input type, missing required columns, duplicate `note_id`s when `aggregate_notes=False`.
+- A real end-to-end integration test against a local `SparkSession`, comparing distributed `run_databricks()` output to local `extract_df()` output row-for-row.
+- Output schema matches the declared Spark schema.
+- Note aggregation across split rows sharing one `note_id`.
+- Person and extra identifier column handling, verified through the full distributed path with per-row correctness checks (not just column presence).
+
+Tests requiring PySpark are skipped automatically (`pytest.importorskip`) when PySpark isn't installed. Tests requiring an actual Spark session will error, rather than skip, if PySpark is installed but no working JVM/`JAVA_HOME` is available — a Java 17+ runtime is required to run the integration tests locally.
+
+Run the full suite with:
+
+```bash
+pytest
+```
+
+Run just the Spark tests with:
+
+```bash
+pytest unittests/test_spark.py -v
+```
+
+---
+
 ## Changelog
+
+### 0.1.8
+
+- **Added `run_sudregex(...)`** — a unified entry point with `environment="local"|"databricks"` for selecting local pandas or distributed Databricks/Spark execution.
+- **Added native Databricks/Apache Spark support** via `mapInPandas`, reusing the existing pandas extraction logic rather than a separate matching engine.
+- **Added the optional `spark` dependency extra** (`pip install "sudregex[spark]"`, installs `pyspark>=3.4` and `pyarrow>=15.0`).
+- **Fixed: `extra_id_columns` are now correctly reattached to `extract_df()` output.** Previously, only `person_column` was carried through the identifier crosswalk; `extra_id_columns` were computed but silently dropped. This affected both the local and Databricks paths identically (the Databricks path additionally crashed rather than silently dropping the column, since the missing identifier was backfilled with an integer that Arrow couldn't serialize as a string). Fixed by extending `_build_crosswalk()` to carry `extra_id_columns` alongside `person_column`.
+- **No other changes to `extract()` or `extract_df()`** — both otherwise remain behaviorally identical to 0.1.7; the local path of `run_sudregex()` is a direct passthrough to `extract_df()`.
+- **Added `unittests/test_spark.py`** covering schema generation, error handling, and real Spark-session integration tests.
+- **Added `run_sudregex()` dispatcher tests to `unittests/test_init.py`** covering environment selection, error handling, and local-path parity with `extract_df()`.
 
 ### 0.1.7
 
@@ -448,7 +597,7 @@ MIT — see [LICENSE](LICENSE) for details.
 
 If `sudregex` is useful in your work, please cite:
 
-> Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.7). GitHub. https://github.com/quantitativenurse/sud-regex
+> Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.8). GitHub. https://github.com/quantitativenurse/sud-regex
 
 ### Acknowledgements
 

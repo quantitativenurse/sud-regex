@@ -321,3 +321,130 @@ def test_identifier_column_order_in_output():
     )
     cols = list(out.columns)
     assert cols[0] == "person_col" and cols[1] == "note_id"
+
+
+# ============================================================
+# run_sudregex() dispatcher tests
+#
+# These cover the environment="local"|"databricks" wrapper added in 0.1.8.
+# None of these require pyspark to be installed: the "local" path never
+# touches Spark, and the "databricks" error-path tests raise before any
+# pyspark import happens (run_databricks() checks spark is None as its
+# first statement, before the try/except pyspark import). Tests requiring
+# an actual SparkSession live in unittests/test_spark.py instead.
+# ============================================================
+
+
+def test_run_sudregex_default_environment_is_local():
+    """run_sudregex() with no environment= specified should behave exactly like extract_df()."""
+    df = pd.DataFrame({"note_id": ["1", "2"], "note_text": ["apple pie", "banana only"]})
+    checklist = _mk_checklist(item_name="apple_chk", pat=re.compile(r"\bapple\b"))
+
+    via_extract_df = sudregex.extract_df(
+        df, checklist, terms=["__dummy__"], remove_linebreaks=False, include_note_text=False
+    )
+    via_run_sudregex = sudregex.run_sudregex(
+        df, checklist, terms=["__dummy__"], remove_linebreaks=False, include_note_text=False
+    )
+
+    pd.testing.assert_frame_equal(
+        via_extract_df.reset_index(drop=True),
+        via_run_sudregex.reset_index(drop=True),
+    )
+
+
+def test_run_sudregex_explicit_local_matches_extract_df():
+    """run_sudregex(..., environment='local') should be identical to calling extract_df() directly."""
+    df = pd.DataFrame(
+        {
+            "note_id": ["1", "2", "3"],
+            "note_text": ["patient denies foo use", "foo confirmed", "no mention here"],
+        }
+    )
+    checklist = _mk_checklist(negation=True)
+
+    via_extract_df = sudregex.extract_df(
+        df,
+        checklist,
+        terms=["__dummy__"],
+        negation_scope="left",
+        include_note_text=True,
+        remove_linebreaks=False,
+    )
+    via_run_sudregex = sudregex.run_sudregex(
+        df,
+        checklist,
+        environment="local",
+        terms=["__dummy__"],
+        negation_scope="left",
+        include_note_text=True,
+        remove_linebreaks=False,
+    )
+
+    pd.testing.assert_frame_equal(
+        via_extract_df.reset_index(drop=True),
+        via_run_sudregex.reset_index(drop=True),
+    )
+
+
+def test_run_sudregex_local_ignores_spark_kwarg():
+    """
+    Passing spark= on the local path should be silently ignored (popped from kwargs)
+    rather than raising, so callers can flip environments by changing one argument
+    without conditionally omitting spark=.
+    """
+    df = pd.DataFrame({"note_id": ["1"], "note_text": ["foo here"]})
+    checklist = _mk_checklist()
+
+    out = sudregex.run_sudregex(
+        df,
+        checklist,
+        environment="local",
+        spark="not_a_real_sparksession",
+        terms=["__dummy__"],
+        remove_linebreaks=False,
+    )
+    assert out.loc[out.note_id == "1", "foo_chk"].iloc[0] >= 1
+
+
+def test_run_sudregex_unsupported_environment_raises():
+    df = pd.DataFrame({"note_id": ["1"], "note_text": ["foo"]})
+    checklist = _mk_checklist()
+    with pytest.raises(ValueError, match="Unsupported environment"):
+        sudregex.run_sudregex(df, checklist, environment="banana", terms=["__dummy__"])
+
+
+def test_run_sudregex_databricks_without_spark_raises():
+    """
+    This should raise before ever touching pyspark: run_sudregex('databricks') lazily
+    imports sudregex.spark (which itself has no pyspark import at module load time)
+    and run_databricks() checks for spark=None as its very first statement. So this
+    test must pass even in an environment with no pyspark installed at all.
+    """
+    df = pd.DataFrame({"note_id": ["1"], "note_text": ["foo"]})
+    checklist = _mk_checklist()
+    with pytest.raises(ValueError, match="requires an active SparkSession"):
+        sudregex.run_sudregex(df, checklist, environment="databricks", spark=None, terms=["__dummy__"])
+
+
+def test_run_sudregex_environment_case_insensitive():
+    """environment='LOCAL' / 'Local' should behave the same as 'local'."""
+    df = pd.DataFrame({"note_id": ["1"], "note_text": ["foo"]})
+    checklist = _mk_checklist()
+
+    out_lower = sudregex.run_sudregex(
+        df, checklist, environment="local", terms=["__dummy__"], remove_linebreaks=False
+    )
+    out_upper = sudregex.run_sudregex(
+        df, checklist, environment="LOCAL", terms=["__dummy__"], remove_linebreaks=False
+    )
+
+    pd.testing.assert_frame_equal(out_lower.reset_index(drop=True), out_upper.reset_index(drop=True))
+
+
+def test_run_sudregex_in_dunder_all():
+    assert "run_sudregex" in sudregex.__all__
+
+
+def test_run_sudregex_is_public_attribute():
+    assert callable(sudregex.run_sudregex)

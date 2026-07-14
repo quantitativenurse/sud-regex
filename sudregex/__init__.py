@@ -8,6 +8,7 @@ coordinates shared runtime setup, input normalization, identifier handling,
 and parallel backend selection before delegating row-wise extraction work to
 the helper layer.
 """
+
 from importlib.metadata import PackageNotFoundError, version
 from typing import List, Optional, Tuple, Union
 
@@ -23,6 +24,7 @@ __all__ = [
     "__version__",
     "extract",
     "extract_df",
+    "run_sudregex",
     "remove_line_break",
     "remove_tobacco_mentions",
     "set_terms",
@@ -344,11 +346,17 @@ def _build_crosswalk(
     work: pd.DataFrame,
     id_column: Optional[str],
     person_column: Optional[str],
+    extra_id_columns: Optional[List[str]] = None,
 ) -> Optional[pd.DataFrame]:
     """
     Build a note-to-person crosswalk for identifier reattachment after extraction.
+
+    Includes `extra_id_columns` alongside `person_column` so both are reattached
+    to the final result by `_finalize_result()`. Previously only `person_column`
+    was carried through this path; `extra_id_columns` were computed separately
+    (see `_group_notes_and_extras`) but never merged back into the output.
     """
-    cross_cols = [c for c in [id_column, person_column] if c and c in work.columns]
+    cross_cols = [c for c in [id_column, person_column, *(extra_id_columns or [])] if c and c in work.columns]
     if not cross_cols:
         return None
 
@@ -480,6 +488,7 @@ def _prepare_grouped_input(
         work=work,
         id_column=id_column,
         person_column=person_column,
+        extra_id_columns=extra_id_columns,
     )
 
     if remove_linebreaks:
@@ -913,3 +922,54 @@ def extract_df(
         return result, previews_df
 
     return result
+
+
+# Supported runtime environments for run_sudregex().
+SUPPORTED_ENVIRONMENTS = {"local", "databricks"}
+
+
+def run_sudregex(
+    notes,
+    pattern_library,
+    environment: str = "local",
+    spark=None,
+    **kwargs,
+):
+    """
+    Run sudregex extraction in a selectable runtime environment.
+
+    This is a thin convenience wrapper that preserves all existing behavior:
+
+    - ``environment="local"`` (the default) runs the unchanged in-memory pandas
+      path. It is exactly equivalent to calling :func:`extract_df` and accepts
+      the same keyword arguments. Existing ``extract_df()``/``extract()`` calls
+      are unaffected.
+    - ``environment="databricks"`` distributes the work across a Spark cluster
+      using ``mapInPandas`` (see :mod:`sudregex.spark`). It requires an active
+      ``SparkSession`` passed as ``spark=...`` and returns a **Spark DataFrame**
+      with the same logical output columns and match counts as the local path.
+      ``notes`` may be a pandas or Spark DataFrame.
+
+    PySpark is only imported when ``environment="databricks"`` is selected, so
+    local-only users never need it installed.
+
+    Raises:
+        ValueError: for an unsupported ``environment`` value, or when
+            ``environment="databricks"`` is requested without a ``SparkSession``.
+    """
+    env = (environment or "local").lower()
+    if env not in SUPPORTED_ENVIRONMENTS:
+        raise ValueError(
+            f"Unsupported environment={environment!r}. " f"Choose one of {sorted(SUPPORTED_ENVIRONMENTS)}."
+        )
+
+    if env == "local":
+        # spark is meaningless locally; ignore it rather than erroring so the
+        # same call site can flip environments by changing one argument.
+        kwargs.pop("spark", None)
+        return extract_df(notes, pattern_library, **kwargs)
+
+    # environment == "databricks"
+    from .spark import run_databricks
+
+    return run_databricks(notes, pattern_library, spark=spark, **kwargs)

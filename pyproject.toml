@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sudregex"
-version = "0.1.7"
+version = "0.1.8"
 description = "Regex-driven extraction with negation for clinical text (SUD-focused)."
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
@@ -41,8 +41,8 @@ dev = [
 ]
 viz = ["matplotlib>=3.6"]
 yaml = ["pyyaml>=6"]
-all = ["matplotlib>=3.6", "pyyaml>=6"]  # optional extras
-
+spark = ["pyspark>=3.4", "pyarrow>=15.0"]
+all = ["matplotlib>=3.6", "pyyaml>=6", "pyspark>=3.4","pyarrow>=15.0"]  # optional extras
 [project.scripts]
 sudregex = "sudregex.cli:main"
 

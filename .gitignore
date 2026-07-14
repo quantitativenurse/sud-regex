@@ -19,7 +19,7 @@ venv/
 ENV/
 env/
 .env
-
+.venv313/
 # Test / coverage output
 .pytest_cache/
 .coverage
@@ -49,7 +49,9 @@ Thumbs.db
 
 # folders and testings 
 ChecklistValidation/
+unittests/artifacts/
+
 *csv
 *txt
 /data/g_jeffery_lab/substance_use_disorders/code/preprocessing/regex/generalized/regex_package/unittests/artifacts
-/data/g_jeffery_lab/substance_use_disorders/code/preprocessing/regex/generalized/regex_package/unittests/data
+/data/g_jeffery_lab/substance_use_disorders/code/preprocessing/regex/generalized/regex_package/unittests/data.venv313/
