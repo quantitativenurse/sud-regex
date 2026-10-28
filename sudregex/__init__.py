@@ -690,6 +690,13 @@ def extract(
     Output behavior:
     - if a single batch is produced, write directly to `out_file`
     - if multiple batches are produced, write to numbered part files
+
+    Negation direction:
+    - `negation_scope` (`"left"`, `"right"`, or `"both"`) sets the default scan
+      direction for every pattern library item
+    - an item can override it with its own `negation_scope` key (`"left"`,
+      `"right"`, `"both"`, or `False` to apply no negation cues); items that do
+      not set the key use this global value
     """
     import os
     import time
@@ -846,6 +853,13 @@ def extract_df(
     This function shares the same preparation, extraction, and finalization
     pipeline as `extract()`, so notebook and file-based workflows remain
     behaviorally aligned.
+
+    Negation direction:
+    - `negation_scope` (`"left"`, `"right"`, or `"both"`) sets the default scan
+      direction for every pattern library item
+    - an item can override it with its own `negation_scope` key (`"left"`,
+      `"right"`, `"both"`, or `False` to apply no negation cues); items that do
+      not set the key use this global value
     """
     pattern_library_obj = _initialize_runtime(
         pattern_library=pattern_library,

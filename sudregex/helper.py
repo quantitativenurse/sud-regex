@@ -553,6 +553,9 @@ def check_negation(
     - `"left"`
     - `"right"`
     - `"both"`
+
+    `regex_extract` passes the per-item `negation_scope` from the pattern library
+    here, or the global `negation_scope` when an item does not set one.
     """
     t = t or []
     cues = ["no ", "not ", "denie", "denial", "doubt", "never", "negative", "without", "neg", "didn't"]
@@ -876,6 +879,39 @@ def previews_batch(
 # ============================================================
 
 
+_NEGATION_SIDES = {"left", "right", "both"}
+_NEGATION_OFF = {"false", "off", "none"}
+
+
+def _resolve_negation_scope(item_key, item_cfg, global_scope: str) -> tuple[str, bool]:
+    """
+    Resolve the negation direction for one pattern library item.
+
+    The optional per-item `negation_scope` key takes precedence over the global
+    `negation_scope` passed to the extraction call. Allowed per-item values:
+    - `"left"`, `"right"`, `"both"`: scan that side of each match for cues
+    - `False` (or `"false"` / `"off"`): keep the item's `_NEG` columns but apply no cues
+
+    When the key is missing or `None`, the global scope is used unchanged.
+
+    Returns `(side, apply_cues)`.
+    """
+    raw = item_cfg.get("negation_scope")
+    if raw is None:
+        return global_scope, True
+    if raw is False:
+        return global_scope, False
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        if value in _NEGATION_OFF:
+            return global_scope, False
+        if value in _NEGATION_SIDES:
+            return value, True
+    raise ValueError(
+        f"Pattern library item {item_key!r}: negation_scope must be 'left', 'right', 'both', or False; got {raw!r}"
+    )
+
+
 def regex_extract(
     pattern_library,
     df_to_analyze,
@@ -902,11 +938,19 @@ def regex_extract(
     - applies discharge-context and false-positive pruning when configured
     - optionally emits previews for pattern library items marked with `preview=True`
 
+    Negation direction is taken from the optional per-item `negation_scope` key in
+    the pattern library (`"left"`, `"right"`, `"both"`, or `False`), falling back to
+    the global `negation_scope` argument when an item does not set one.
+
     The input note text is assumed to have been normalized upstream.
     """
     negation_scope = (negation_scope or "left").lower()
     if negation_scope not in {"left", "right", "both"}:
         raise ValueError("negation_scope must be 'left', 'right', or 'both'")
+
+    # Fail early on a bad per-item value rather than partway through a long run.
+    for key in pattern_library:
+        _resolve_negation_scope(key, pattern_library[key], negation_scope)
 
     _dbg(
         f"[DEBUG] Starting regex_extract: df_to_analyze.shape={df_to_analyze.shape}, "
@@ -928,7 +972,8 @@ def regex_extract(
 
         has_substance = bool(pattern_library[i].get("substance") or pattern_library[i].get("opioid"))
         has_negation = bool(pattern_library[i].get("negation"))
-        _dbg(f"[DEBUG]  → substance={has_substance}, negation={has_negation}")
+        item_side, apply_cues = _resolve_negation_scope(i, pattern_library[i], negation_scope)
+        _dbg(f"[DEBUG]  → substance={has_substance}, negation={has_negation}, scope={item_side}, cues={apply_cues}")
 
         _dbg(f"[DEBUG]  → Calling regex_search_file for '{col_name}'")
         df_searched = regex_search_file(
@@ -972,9 +1017,9 @@ def regex_extract(
                             f"{active_col}_NEG",
                             df_searched,
                             t=[],
-                            neg=True,
+                            neg=apply_cues,
                             span=WIN_NEGATION,
-                            side=negation_scope,
+                            side=item_side,
                             use_parallel=use_parallel,
                             parallel_backend=parallel_backend,
                             n_workers=n_workers,
@@ -1004,9 +1049,9 @@ def regex_extract(
                     f"{col_name}_NEG",
                     df_searched,
                     t=[],
-                    neg=True,
+                    neg=apply_cues,
                     span=WIN_NEGATION,
-                    side=negation_scope,
+                    side=item_side,
                     use_parallel=use_parallel,
                     parallel_backend=parallel_backend,
                     n_workers=n_workers,

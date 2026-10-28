@@ -5,7 +5,7 @@
 
 # sudregex
 
-> **Version:** 0.1.8
+> **Version:** 0.2.0
 
 A lightweight, high-throughput pipeline for regex-driven extraction with negation and false-positive pruning. Developed for Substance Use Disorder (SUD) research, but the core extraction workflow is flexible enough for broader clinical text mining use cases.
 
@@ -14,7 +14,7 @@ A lightweight, high-throughput pipeline for regex-driven extraction with negatio
 ## ✨ Features
 
 - **Unified gating utilities** for substance context, negation, common false-positive pruning, and discharge-context filtering
-- **Configurable negation scope** with `left` (default), `right`, or `both`
+- **Configurable negation scope** with `left` (default), `right`, or `both`, set globally or per pattern library item
 - **Substance-context gating** to require matches near a user-supplied vocabulary
 - **Actual match counts** in output columns — not binary flags
 - **Deterministic, gated previews** that only show rows passing all configured gates
@@ -356,6 +356,7 @@ Each item in the pattern library is a dict with these keys:
 | `col_name` | str | Output column name |
 | `substance` | bool | Require a substance term nearby? |
 | `negation` | bool | Apply the negation gate? |
+| `negation_scope` | `"left"`, `"right"`, `"both"`, or `False` (optional) | Negation direction for this item only. When omitted, the global `negation_scope` argument is used. See [Per-item negation direction](#per-item-negation-direction). |
 | `preview` | bool | Emit preview snippets? |
 | `common_fp` | list (optional) | Terms that indicate a false positive |
 
@@ -376,6 +377,31 @@ pattern_library = {
     },
 }
 ```
+
+### Per-item negation direction
+
+The negation gate looks for cues such as "no", "denies" and "negative" in a window around each match. By default one global setting, `negation_scope="left"` (also `"right"` or `"both"`), controls which side of the match is scanned for every item. An item can override that with an optional `negation_scope` key:
+
+| Item value | Behavior |
+|------------|----------|
+| `"left"` | Scan only the text before the match |
+| `"right"` | Scan only the text after the match |
+| `"both"` | Scan both sides |
+| `False` (or `"false"` / `"off"`) | Keep the item's `_NEG` columns but apply no negation cues |
+| omitted or `None` | Use the global `negation_scope` argument (default `"left"`) |
+
+The key only matters when the item has `"negation": True`; it is ignored otherwise. Items that do not set it behave exactly as before, so existing pattern libraries, including the packaged ABC library, produce identical output. An invalid value raises a `ValueError` naming the item.
+
+**When to prefer `left` or `right`.** Pasted lab results put several substances next to each other, so a cue that belongs to one substance can sit next to another. In `amphetamines negative, cocaine positive`, the word "negative" belongs to amphetamines, but it is immediately left of "cocaine". A left or both scan on the cocaine item treats the cocaine match as negated and drops a true positive. Setting the cocaine item to `"right"` keeps it, and setting the amphetamine item to `"right"` still honors its negative result:
+
+```python
+pattern_library = {
+    "coc": {"pat": r"cocaine", "col_name": "cocaine", "negation": True, "negation_scope": "right", ...},
+    "amp": {"pat": r"amphetamine", "col_name": "amphetamine", "negation": True, "negation_scope": "right", ...},
+}
+```
+
+Use `"left"` for narrative text such as "denies cocaine use", where the cue comes first. Use `"right"` when results are written after the substance name, as in lab panels ("cocaine negative"). Use `"both"` when either order is common and neighbouring terms are not a concern.
 
 > **Backward compatibility:** The `checklist=` parameter is a deprecated alias for `pattern_library=`.
 > Files that define a `checklist` variable still work. Both will be supported through the next major version.
@@ -550,6 +576,13 @@ pytest unittests/test_spark.py -v
 
 ## Changelog
 
+### 0.2.0
+
+- **Added per-item negation direction.** Pattern library items accept an optional `negation_scope` key (`"left"`, `"right"`, `"both"`, or `False`). When an item does not set it, the global `negation_scope` argument is used, so existing pattern libraries and the packaged ABC library produce identical output.
+- **Documented the lab-result case** (`amphetamines negative, cocaine positive`) and when to prefer `left` or `right`.
+- **Known limitation, unchanged in this release:** with multiple matches of one pattern in a note, the substance, negation, discharge and false-positive checks are not applied per match, so the final `_NEG` count can exceed the number of matches that pass every check.
+- **Added `unittests/test_negation_scope.py`** covering each setting, the global fallback, validation, the lab-result case, and a regression check of the packaged library.
+
 ### 0.1.8
 
 - **Added `run_sudregex(...)`** — a unified entry point with `environment="local"|"databricks"` for selecting local pandas or distributed Databricks/Spark execution.
@@ -597,7 +630,7 @@ MIT — see [LICENSE](LICENSE) for details.
 
 If `sudregex` is useful in your work, please cite:
 
-> Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.8). GitHub. https://github.com/quantitativenurse/sud-regex
+> Quantitative Nurse Lab. (2025). *sudregex* (Version 0.2.0). GitHub. https://github.com/quantitativenurse/sud-regex
 
 ### Acknowledgements
 
