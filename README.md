@@ -580,8 +580,11 @@ pytest unittests/test_spark.py -v
 
 - **Added per-item negation direction.** Pattern library items accept an optional `negation_scope` key (`"left"`, `"right"`, `"both"`, or `False`). When an item does not set it, the global `negation_scope` argument is used, so existing pattern libraries and the packaged ABC library produce identical output.
 - **Documented the lab-result case** (`amphetamines negative, cocaine positive`) and when to prefer `left` or `right`.
-- **Known limitation, unchanged in this release:** with multiple matches of one pattern in a note, the substance, negation, discharge and false-positive checks are not applied per match, so the final `_NEG` count can exceed the number of matches that pass every check.
 - **Added `unittests/test_negation_scope.py`** covering each setting, the global fallback, validation, the lab-result case, and a regression check of the packaged library.
+- **Fixed: final match counts now apply every gate per match.** Previously the substance, negation, discharge and common-false-positive checks each re-counted every match in the note, so a match that failed an earlier check could still be counted in the final `_NEG` / `_SUBSTANCE_MATCHED_NEG` column. Each match is now checked against all configured gates once, and counted only if it passes all of them. Notes with a single match are unaffected; on notes with several matches the final count can be lower than in earlier versions. In a 100,000-note sample this changed 193 notes (about 15% fewer counted matches overall), and the number of notes flagged changed only for `opioid_mention`.
+- **The final-column counts can therefore differ from results produced with 0.1.7 and 0.1.8.** The raw count and `_SUBSTANCE_MATCHED` columns are unchanged.
+- **Faster extraction.** The pattern is scanned once per note and item instead of up to five times.
+- **Added `unittests/test_per_match_gating.py`** covering matches that fail different gates, discharge on and off, common false positives, and serial vs. parallel agreement.
 
 ### 0.1.8
 

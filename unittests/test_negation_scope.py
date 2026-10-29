@@ -149,12 +149,11 @@ def test_published_library_has_no_item_level_scope():
 
 def test_published_library_output_is_unchanged():
     """
-    Golden output of the published ABC library on synthetic notes, captured from 0.1.8
-    before per-item negation_scope was added. Per-item scope must not change it.
+    Golden output of the published ABC library on synthetic notes.
 
-    The values intentionally reflect current behaviour, including the known gate
-    stacking over-count on multi-match notes (G03, G04, G16). Regenerate this
-    dictionary deliberately when that behaviour is changed.
+    Per-item negation_scope must not change output for libraries that do not set it. The
+    values reflect per-match gating: a match is counted in a final column only if it passes
+    every gate (see test_per_match_gating.py). Regenerate deliberately if gate behavior changes.
     """
     df = pd.DataFrame({"note_id": list(NOTES), "note_text": list(NOTES.values())})
     out = sudregex.extract_df(
@@ -205,22 +204,19 @@ GOLDEN = {
     "G03": {
         "illicit_drug_use": 2,
         "illicit_drug_use_SUBSTANCE_MATCHED": 1,
-        "illicit_drug_use_SUBSTANCE_MATCHED_NEG": 2,
         "opioid_mention": 1,
         "opioid_mention_SUBSTANCE_MATCHED": 1,
     },
     "G04": {
         "illicit_drug_use": 2,
         "illicit_drug_use_SUBSTANCE_MATCHED": 2,
-        "illicit_drug_use_SUBSTANCE_MATCHED_NEG": 1,
         "opioid_mention": 2,
         "opioid_mention_SUBSTANCE_MATCHED": 2,
-        "opioid_mention_SUBSTANCE_MATCHED_NEG": 2,
     },
     "G05": {
         "illicit_drug_use": 2,
         "illicit_drug_use_SUBSTANCE_MATCHED": 2,
-        "illicit_drug_use_SUBSTANCE_MATCHED_NEG": 2,
+        "illicit_drug_use_SUBSTANCE_MATCHED_NEG": 1,
         "opioid_mention": 1,
         "opioid_mention_SUBSTANCE_MATCHED": 1,
     },
@@ -287,9 +283,9 @@ GOLDEN = {
     "G16": {
         "illicit_drug_use": 2,
         "illicit_drug_use_SUBSTANCE_MATCHED": 2,
-        "illicit_drug_use_SUBSTANCE_MATCHED_NEG": 2,
+        "illicit_drug_use_SUBSTANCE_MATCHED_NEG": 1,
         "opioid_mention": 2,
         "opioid_mention_SUBSTANCE_MATCHED": 2,
-        "opioid_mention_SUBSTANCE_MATCHED_NEG": 2,
+        "opioid_mention_SUBSTANCE_MATCHED_NEG": 1,
     },
 }
