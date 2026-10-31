@@ -1094,9 +1094,10 @@ def regex_extract(
             parallel_backend=parallel_backend,
             n_workers=n_workers,
         )
+        # Cast explicitly so a zero-row input still yields int64 count columns.
         work[["_raw", "_substance", "_final"]] = pd.DataFrame(
             scores.tolist(), columns=["_raw", "_substance", "_final"], index=work.index
-        )
+        ).astype("int64")
 
         # Which columns an item emits, and which one carries its final signal, depends on its gates.
         out_cols = [col_name]
