@@ -21,9 +21,14 @@ import pytest
 from sudregex import spark as sudregex_spark
 from sudregex.pattern_library import pattern_library as full_pattern_library
 
-pyspark = pytest.importorskip("pyspark", reason="pyspark not installed; skipping Spark integration tests")
+# pyspark is only required by the schema-building and integration tests; the column-naming
+# tests run without it. Each test that needs it calls `_require_pyspark()`.
+_PYSPARK_REASON = "pyspark not installed; skipping Spark integration tests"
 
-from pyspark.sql import SparkSession  # noqa: E402
+
+def _require_pyspark():
+    return pytest.importorskip("pyspark", reason=_PYSPARK_REASON)
+
 
 # ----------------------------------------------------------------------
 # Fixtures
@@ -33,6 +38,9 @@ from pyspark.sql import SparkSession  # noqa: E402
 @pytest.fixture(scope="module")
 def spark_session():
     """A local, single-JVM SparkSession for tests. Torn down after the module."""
+    _require_pyspark()
+    from pyspark.sql import SparkSession
+
     session = (
         SparkSession.builder.master("local[2]")
         .appName("sudregex-tests")
@@ -164,6 +172,7 @@ class TestOutputColumns:
 
 class TestBuildSparkSchema:
     def test_schema_field_names_and_order(self, mini_library):
+        _require_pyspark()
         from pyspark.sql.types import LongType, StringType
 
         schema = sudregex_spark.build_spark_schema(mini_library, id_column="note_id", person_column="grid")
@@ -179,6 +188,7 @@ class TestBuildSparkSchema:
 
     def test_schema_from_file_path(self, tmp_path, mini_library):
         """build_spark_schema should also accept a pattern_library.py file path."""
+        _require_pyspark()
         lib_file = tmp_path / "mini_lib.py"
         lib_file.write_text(
             "import re\n"

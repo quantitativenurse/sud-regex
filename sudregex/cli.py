@@ -108,7 +108,8 @@ def main():
         "--negation-scope",
         choices=["left", "right", "both"],
         default="left",
-        help="Where to look for negation cues relative to a hit (default: left).",
+        help="Where to look for negation cues relative to a hit (default: left). "
+        "Pattern library items can override this with their own negation_scope key.",
     )
 
     # --- Discharge-mentions policy (default: EXCLUDE) ---

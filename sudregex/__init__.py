@@ -241,43 +241,6 @@ def _init_parallel(
     return False, None, None
 
 
-def _apply_series(
-    series: pd.Series,
-    func,
-    use_parallel: bool,
-    parallel_backend: Optional[str],
-    n_workers: Optional[int],
-) -> pd.Series:
-    """
-    Apply a function to a Series using the configured execution backend.
-
-    Behavior:
-    - serial mode uses pandas `.apply()`
-    - `pandarallel` uses `.parallel_apply()` directly for prep-time operations
-    - `loky` delegates to the helper-layer backend-aware dispatcher
-    """
-    if not use_parallel or not parallel_backend:
-        return series.apply(func)
-
-    backend = parallel_backend.lower()
-
-    if backend == "pandarallel":
-        if hasattr(series, "parallel_apply"):
-            return series.parallel_apply(func)
-        return series.apply(func)
-
-    if backend == "loky":
-        return _helper._apply_series(
-            series=series,
-            func=func,
-            use_parallel=True,
-            parallel_backend="loky",
-            n_workers=n_workers,
-        )
-
-    return series.apply(func)
-
-
 def _required_columns(
     *,
     note_column: str,
@@ -492,7 +455,7 @@ def _prepare_grouped_input(
     )
 
     if remove_linebreaks:
-        work[note_column] = _apply_series(
+        work[note_column] = _helper._apply_series(
             work[note_column],
             _helper.remove_line_break,
             use_parallel=use_parallel,
@@ -690,6 +653,13 @@ def extract(
     Output behavior:
     - if a single batch is produced, write directly to `out_file`
     - if multiple batches are produced, write to numbered part files
+
+    Negation direction:
+    - `negation_scope` (`"left"`, `"right"`, or `"both"`) sets the default scan
+      direction for every pattern library item
+    - an item can override it with its own `negation_scope` key (`"left"`,
+      `"right"`, `"both"`, or `False` to apply no negation cues); items that do
+      not set the key use this global value
     """
     import os
     import time
@@ -846,6 +816,13 @@ def extract_df(
     This function shares the same preparation, extraction, and finalization
     pipeline as `extract()`, so notebook and file-based workflows remain
     behaviorally aligned.
+
+    Negation direction:
+    - `negation_scope` (`"left"`, `"right"`, or `"both"`) sets the default scan
+      direction for every pattern library item
+    - an item can override it with its own `negation_scope` key (`"left"`,
+      `"right"`, `"both"`, or `False` to apply no negation cues); items that do
+      not set the key use this global value
     """
     pattern_library_obj = _initialize_runtime(
         pattern_library=pattern_library,
