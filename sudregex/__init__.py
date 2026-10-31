@@ -241,43 +241,6 @@ def _init_parallel(
     return False, None, None
 
 
-def _apply_series(
-    series: pd.Series,
-    func,
-    use_parallel: bool,
-    parallel_backend: Optional[str],
-    n_workers: Optional[int],
-) -> pd.Series:
-    """
-    Apply a function to a Series using the configured execution backend.
-
-    Behavior:
-    - serial mode uses pandas `.apply()`
-    - `pandarallel` uses `.parallel_apply()` directly for prep-time operations
-    - `loky` delegates to the helper-layer backend-aware dispatcher
-    """
-    if not use_parallel or not parallel_backend:
-        return series.apply(func)
-
-    backend = parallel_backend.lower()
-
-    if backend == "pandarallel":
-        if hasattr(series, "parallel_apply"):
-            return series.parallel_apply(func)
-        return series.apply(func)
-
-    if backend == "loky":
-        return _helper._apply_series(
-            series=series,
-            func=func,
-            use_parallel=True,
-            parallel_backend="loky",
-            n_workers=n_workers,
-        )
-
-    return series.apply(func)
-
-
 def _required_columns(
     *,
     note_column: str,
@@ -492,7 +455,7 @@ def _prepare_grouped_input(
     )
 
     if remove_linebreaks:
-        work[note_column] = _apply_series(
+        work[note_column] = _helper._apply_series(
             work[note_column],
             _helper.remove_line_break,
             use_parallel=use_parallel,
