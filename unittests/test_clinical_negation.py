@@ -421,3 +421,58 @@ def test_terminator_helpers():
     assert helper._after_last_terminator("no cue here", t) == "no cue here"
     assert helper._before_first_terminator("a but b. c", t) == "a "
     assert helper._before_first_terminator("plain", t) == "plain"
+
+
+# ---------- the validator applies the same rules ----------
+
+from sudregex.validation import _helper_negation, validate_pattern_library  # noqa: E402
+
+
+def _validate(lib, text, expected=1, **kwargs):
+    examples = pd.DataFrame({"item_key": ["t"], "expected": [expected], "note_text": [text]})
+    detailed, _ = validate_pattern_library(lib, examples, **kwargs)
+    return int(detailed.at[0, "actual_match"])
+
+
+def test_validator_uses_the_package_cues():
+    assert _validate(_item("cocaine"), "Patient denying cocaine use.") == 0
+    assert _validate(_item("cocaine"), "Doubt cocaine use.") == 1
+    assert _validate(_item("cocaine"), "Patient didnt use cocaine.") == 0
+    assert _validate(_item("cocaine"), "neglect noted; cocaine use.") == 1
+
+
+def test_validator_honours_item_scope_and_window():
+    assert _validate(_item("cocaine", negation_scope="right"), "Cocaine use denied.") == 0
+    assert _validate(_item("cocaine", negation_scope="right"), "Denies cocaine use.") == 1
+    assert _validate(_item("cocaine", negation_scope=False), "Denies cocaine use.") == 1
+    assert _validate(_item("cocaine", negation_scope="right", negation_window=12), UDS) == 1
+    assert _validate(_item("cocaine", negation_scope="right"), UDS) == 0
+
+
+def test_validator_global_scope_and_legacy_window_key():
+    assert _validate(_item("cocaine"), "Cocaine use denied.", negation_scope="right") == 0
+    assert _validate(_item("cocaine"), "Cocaine use denied.") == 1
+    # The validator-only `neg_left_span` key still works when `negation_window` is absent.
+    assert _validate(_item("cocaine", neg_left_span=10), "No fever today. Cocaine positive.") == 1
+    assert _validate(_item("cocaine"), "No fever today. Cocaine positive.") == 0
+
+
+def test_validator_agrees_with_extract_df_on_every_section():
+    cases = [
+        ("No fever.", "fever", {}),
+        ("Patient denies chest pain.", "chest pain", {}),
+        ("Patient doesn\u2019t smoke.", "smoke", {}),
+        ("Influenza test was negative.", "influenza", {"negation_scope": "right"}),
+        ("Rule out pulmonary embolism.", "pulmonary embolism", {"negation_scope": "both"}),
+        ("Pulmonary embolism was ruled out.", "pulmonary embolism", {"negation_scope": "right"}),
+        ("AKI resolved.", "AKI", {"negation_scope": "both"}),
+        (UDS, "cocaine", {"negation_scope": "right", "negation_window": 12}),
+    ]
+    for text, pat, extra in cases:
+        assert _validate(_item(pat, **extra), text) == _kept(text, pat, **extra), (text, pat)
+
+
+def test_helper_negation_is_left_only_with_package_cues():
+    assert _helper_negation("denies cocaine", (7, 14)) is True
+    assert _helper_negation("cocaine denied", (0, 7)) is False
+    assert _helper_negation("doubt cocaine", (6, 13)) is False

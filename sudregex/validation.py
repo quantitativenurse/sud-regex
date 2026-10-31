@@ -7,41 +7,54 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
+from . import helper as _helper
+
 # ---------------- Types & built-ins ----------------
 
 # A negation function returns True if the hit (span) is negated in `text`
 NegationFn = Callable[[str, Tuple[int, int]], bool]
 
-# ---------------- Negation (MATCHES HELPER) ----------------
-# Helper uses *left-only* window (span chars before the match) and a simple vocab:
-#   window = text[max(0, start - span) : stop]
-# Terms: ["no ", "not ", "denie", "denial", "doubt", "never", "negative", "without", "neg", "didn't"]
+# ---------------- Negation (shared with helper) ----------------
+# The validator applies the same cues, scope and window rules as `helper.regex_extract`:
+# `helper.NEGATION_GATE_CUES`, the per-item `negation_scope` / `negation_window` keys (with the
+# global `negation_scope` as fallback) and the opt-in `helper.NEGATION_SCOPE_TERMINATORS`.
 
-_HELPER_NEG_TERMS: List[str] = [
-    "no ",
-    "not ",
-    "denie",  # matches denies/denied/denying
-    "denial",
-    "doubt",
-    "never",
-    "negative",
-    "without",
-    "neg",  # lab shorthand
-    "didn't",
-]
-_HELPER_NEG_RE = re.compile("|".join(re.escape(t) for t in _HELPER_NEG_TERMS), re.IGNORECASE | re.MULTILINE)
+
+def _negation_cue_patterns() -> Sequence[re.Pattern]:
+    return _helper._compile_gate_terms(_helper.NEGATION_GATE_CUES)
+
+
+def _negation_windows(text: str, span: Tuple[int, int], side: str, window: int) -> tuple[str, str]:
+    s, e = span
+    left = text[max(0, s - window) : s] if side in ("left", "both") else ""
+    right = text[e : e + window] if side in ("right", "both") else ""
+    terminators = _helper._compile_gate_terms(_helper.NEGATION_SCOPE_TERMINATORS)
+    if terminators:
+        left = _helper._after_last_terminator(left, terminators)
+        right = _helper._before_first_terminator(right, terminators)
+    return left, right
+
+
+def _negated_in_scope(text: str, span: Tuple[int, int], side: str, window: int) -> bool:
+    left, right = _negation_windows(text, span, side, window)
+    return any(p.search(left) or p.search(right) for p in _negation_cue_patterns())
 
 
 def _helper_negation(text: str, span: Tuple[int, int], left_chars: int = 65) -> bool:
     """
-    MATCHES helper.check_negation logic:
-    - LEFT-ONLY window of `left_chars` before the match, up to the end of the match.
-    - Returns True if any helper-negation term is found in that window.
+    Left-only negation check with the package cues, matching `regex_extract` for an item
+    scanned with `negation_scope="left"`: the `left_chars` characters before the match.
     """
-    s, e = span
-    left = max(0, s - left_chars)
-    window = text[left:e]
-    return _HELPER_NEG_RE.search(window) is not None
+    return _negated_in_scope(text, span, "left", left_chars)
+
+
+def _item_negation_fn(side: str, window: int) -> NegationFn:
+    """Build a `(text, span) -> bool` negation check for one item's scope and window."""
+
+    def _fn(text: str, span: Tuple[int, int]) -> bool:
+        return _negated_in_scope(text, span, side, window)
+
+    return _fn
 
 
 # ---------------- Loaders ----------------
@@ -185,8 +198,11 @@ def _first_substance_term(
 
 
 def _first_helper_negation_cue(window_text: str) -> Optional[str]:
-    m = _HELPER_NEG_RE.search(window_text)
-    return m.group(0) if m else None
+    for p in _negation_cue_patterns():
+        m = p.search(window_text)
+        if m:
+            return m.group(0)
+    return None
 
 
 def _make_snippet(text: str, s: int, e: int, left_chars: int, right_chars: int) -> tuple[str, int, int]:
@@ -207,17 +223,20 @@ def validate_rows(
     substance_window_chars: int = 120,  # window around hit for substance vocab
     *,
     collect_previews: bool = False,  # if True, return previews dataframe
+    negation_scope: str = "left",  # global fallback for items without their own negation_scope
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
     """
     Negation-aware, common_fp-aware, and (optionally) substance-gated validator.
     Optionally collects preview snippets for items with `preview: True` in the pattern library.
 
-    Negation behavior: matches helper.check_negation (LEFT-ONLY, 65 chars by default).
+    Negation behavior matches `helper.regex_extract`: the package cues, each item's
+    `negation_scope` and `negation_window` (falling back to the global `negation_scope` and the
+    65-character default), unless `negation_fn` overrides the check for every item.
     Returns (detailed_out, by_item, previews_df) where previews_df may be None.
     """
-    # default to HELPER-STYLE negation if not supplied
-    if negation_fn is None:
-        negation_fn = _helper_negation
+    negation_scope = (negation_scope or "left").lower()
+    if negation_scope not in {"left", "right", "both"}:
+        raise ValueError("negation_scope must be 'left', 'right', or 'both'")
 
     term_pats = _compile_terms(substance_terms)
 
@@ -230,15 +249,22 @@ def validate_rows(
         pat = _compile_pattern(obj["pat"])
         fps = _compile_common_fp(obj.get("common_fp"))
         needs_sub = bool(obj.get("substance") or obj.get("opioid"))
+        side, apply_cues = _helper._resolve_negation_scope(key, obj, negation_scope)
+        if "negation_window" in obj:
+            window = _helper._resolve_negation_window(key, obj)
+        else:
+            window = int(obj.get("neg_left_span", _helper.WIN_NEGATION))  # older validator-only key
         item_cfg[key] = {
-            "negation": bool(obj.get("negation", False)),
+            "negation": bool(obj.get("negation", False)) and apply_cues,
             "common_fp": fps,
             "needs_substance": needs_sub,
             "preview": bool(obj.get("preview", False)),
             # Optional per-item overrides (safe defaults)
             "substance_window": int(obj.get("substance_window", substance_window_chars)),
             "common_fp_window": int(obj.get("common_fp_window", fp_window_chars)),
-            "neg_left_span": int(obj.get("neg_left_span", 65)),  # match helper default 65
+            "neg_side": side,
+            "neg_window": window,
+            "negation_fn": negation_fn or _item_negation_fn(side, window),
         }
         patterns[key] = pat
         any_item_has_common_fp = any_item_has_common_fp or bool(fps)
@@ -266,9 +292,10 @@ def validate_rows(
     # Previews (optional)
     previews: List[Dict[str, Any]] = []
 
-    # Negation preview window (LEFT ONLY per helper); no right-side expansion
-    def _neg_window_sizes(use_neg: bool, neg_left_span: int) -> tuple[int, int]:
-        return (neg_left_span if use_neg else 0, 0)
+    def _neg_window_sizes(use_neg: bool, side: str, window: int) -> tuple[int, int]:
+        if not use_neg:
+            return 0, 0
+        return (window if side in ("left", "both") else 0, window if side in ("right", "both") else 0)
 
     def apply_match(row):
         key = row["item_key"]
@@ -293,7 +320,7 @@ def validate_rows(
         want_preview = cfg["preview"]
         sw = cfg["substance_window"]
         fw = cfg["common_fp_window"]
-        nl = cfg["neg_left_span"]
+        neg_side, neg_window, item_negation_fn = cfg["neg_side"], cfg["neg_window"], cfg["negation_fn"]
 
         # Applicability flags (row-level)
         # Substance is applicable ONLY if item needs it AND global vocab exists.
@@ -302,7 +329,7 @@ def validate_rows(
         common_fp_applicable = bool(fp_pats)
 
         # Ensure preview snippet is NOT less than any gating window
-        neg_left_req, neg_right_req = _neg_window_sizes(use_neg, nl)
+        neg_left_req, neg_right_req = _neg_window_sizes(use_neg, neg_side, neg_window)
         left_req = max(sw if substance_applicable else 0, fw if common_fp_applicable else 0, neg_left_req)
         right_req = max(sw if substance_applicable else 0, fw if common_fp_applicable else 0, neg_right_req)
 
@@ -320,8 +347,7 @@ def validate_rows(
             # Only compute common_fp window if applicable for this item
             fp_hit = common_fp_applicable and _is_common_fp_hit(text, span, fp_pats, fw)
 
-            # HELPER-STYLE negation (left-only)
-            neg_hit = use_neg and negation_fn(text, span)
+            neg_hit = use_neg and item_negation_fn(text, span)
 
             any_substance = any_substance or bool(sub_hit)
             any_common_fp = any_common_fp or bool(fp_hit)
@@ -329,7 +355,7 @@ def validate_rows(
             # --- PREVIEW capture (BEFORE gating drops a match) ---
             if collect_previews and want_preview:
                 snippet, snip_s, snip_e = _make_snippet(text, span[0], span[1], left_req, right_req)
-                neg_window = text[max(0, span[0] - nl) : span[1]] if use_neg else ""
+                neg_window = " ".join(_negation_windows(text, span, neg_side, neg_window)) if use_neg else ""
                 previews.append(
                     {
                         "item_key": key,
@@ -514,6 +540,7 @@ def validate_pattern_library(
     substance_window_chars: int = 120,
     return_previews: bool = False,  # opt into previews
     previews_csv: str | None = None,  # optional CSV path
+    negation_scope: str = "left",  # global fallback for items without their own negation_scope
 ) -> Tuple[pd.DataFrame, pd.DataFrame] | Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Programmatic API.
@@ -527,7 +554,10 @@ def validate_pattern_library(
     out_csv   : optional path to write detailed CSV
     by_item_csv: optional path to write by-item summary CSV
     negation_fn: optional function (text, span) -> bool (True if negated).
-                 If not provided, a helper-style LEFT-ONLY 65-char window is used.
+                 If not provided, the package cues are applied with each item's
+                 `negation_scope` / `negation_window`, falling back to `negation_scope`
+                 (default "left") and 65 characters, exactly as `extract_df` does.
+    negation_scope: global negation direction used by items that do not set their own.
     fp_window_chars: character window around a hit to check `common_fp` (default 120).
     substance_terms: list of vocab strings to require near hits for items that
                      set `opioid: True` or `substance: True` in the pattern library.
@@ -557,11 +587,12 @@ def validate_pattern_library(
     detailed, by_item, previews = validate_rows(
         pattern_library,
         df,
-        negation_fn=negation_fn or _helper_negation,  # ensure helper-style default
+        negation_fn=negation_fn,
         fp_window_chars=fp_window_chars,
         substance_terms=substance_terms,
         substance_window_chars=substance_window_chars,
         collect_previews=return_previews,
+        negation_scope=negation_scope,
     )
 
     if out_csv:

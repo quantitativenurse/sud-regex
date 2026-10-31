@@ -268,6 +268,7 @@ def main():
             detailed, by_item = validate_pattern_library(
                 pattern_library=args.pattern_library,
                 examples=args.examples,
+                negation_scope=args.negation_scope,
             )
 
             detailed.to_csv(args.val_out, index=False)
