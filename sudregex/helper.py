@@ -104,6 +104,18 @@ HISTORICAL_CUES: list = [
     ]
 ]
 
+# Scope terminators (opt-in). When set, the negation window is cut at the nearest terminator:
+# the left window keeps only the text after its last terminator and the right window only the
+# text before its first one, so "No fever, but chest pain" does not negate "chest pain" and a
+# cue in the previous sentence does not reach across a period. Off by default (empty list) so
+# existing output is unchanged. To enable the clinical set before extracting:
+#     helper.NEGATION_SCOPE_TERMINATORS = list(helper.CLINICAL_SCOPE_TERMINATORS)
+CLINICAL_SCOPE_TERMINATORS: list = [
+    re.compile(p, _CUE_FLAGS)
+    for p in [r"\bbut\b", r"\bhowever\b", r"\balthough\b", r"\bexcept\b", r"\bnevertheless\b", r"[.;]"]
+]
+NEGATION_SCOPE_TERMINATORS: list = []
+
 DISCHARGE_TERMS = ["discharge instructions", "no results for"]
 
 # Default scan windows, in characters.
@@ -1079,6 +1091,26 @@ class _GateConfig(NamedTuple):
     win_negation: int = WIN_NEGATION
     win_discharge: int = WIN_DISCHARGE
     win_fp: int = WIN_CFP
+    terminators: tuple = ()
+
+
+def _after_last_terminator(text: str, terminators) -> str:
+    """Return the part of `text` after the last terminator match, or all of it if none."""
+    cut = 0
+    for p in terminators:
+        for m in p.finditer(text):
+            cut = max(cut, m.end())
+    return text[cut:]
+
+
+def _before_first_terminator(text: str, terminators) -> str:
+    """Return the part of `text` before the first terminator match, or all of it if none."""
+    cut = len(text)
+    for p in terminators:
+        m = p.search(text)
+        if m:
+            cut = min(cut, m.start())
+    return text[:cut]
 
 
 class _ItemSettings(NamedTuple):
@@ -1128,6 +1160,7 @@ def _resolve_item_settings(item_key, item_cfg, global_scope: str, exclude_discha
         dis_pats=_compile_gate_terms(DISCHARGE_TERMS) if should_prune and exclude_discharge_mentions else [],
         fp_pats=_compile_gate_terms(common_fp) if should_prune else [],
         win_negation=_resolve_negation_window(item_key, item_cfg),
+        terminators=tuple(_compile_gate_terms(NEGATION_SCOPE_TERMINATORS)),
     )
     count_columns = item_count_columns(item_cfg)
     return _ItemSettings(
@@ -1166,6 +1199,9 @@ def _iter_match_verdicts(text: str, gates: _GateConfig):
         if passed and gates.neg_pats:
             left = text[max(0, s - gates.win_negation) : s] if gates.side in ("left", "both") else ""
             right = text[e : e + gates.win_negation] if gates.side in ("right", "both") else ""
+            if gates.terminators:
+                left = _after_last_terminator(left, gates.terminators)
+                right = _before_first_terminator(right, gates.terminators)
             passed = not (any(p.search(left) for p in gates.neg_pats) or any(p.search(right) for p in gates.neg_pats))
 
         if passed and gates.dis_pats:

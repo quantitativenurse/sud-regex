@@ -361,3 +361,63 @@ def test_negation_window_ignored_when_negation_is_off():
 
 def test_published_library_sets_no_window():
     assert not any("negation_window" in cfg for cfg in sudregex.pattern_library_abc.values())
+
+
+# ---------- opt-in scope terminators ----------
+
+
+@pytest.fixture
+def clinical_terminators(monkeypatch):
+    monkeypatch.setattr(helper, "NEGATION_SCOPE_TERMINATORS", list(helper.CLINICAL_SCOPE_TERMINATORS))
+
+
+def test_terminators_are_off_by_default():
+    assert helper.NEGATION_SCOPE_TERMINATORS == []
+    assert helper._resolve_item_settings("t", _item("x")["t"], "left", True).gates.terminators == ()
+
+
+def test_contrast_stops_the_scope_when_terminators_are_on(clinical_terminators):
+    text = "No fever, but patient has chest pain."
+    assert _kept(text, "fever") == 0
+    assert _kept(text, "chest pain") == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "No fever however chest pain is present.",
+        "No fever although chest pain is present.",
+        "No complaints except chest pain.",
+        "No fever; nevertheless chest pain is present.",
+        "No fever. Chest pain is present.",
+    ],
+)
+def test_each_terminator_protects_the_concept_after_it(clinical_terminators, text):
+    assert _kept(text, "chest pain") == 1
+
+
+def test_terminators_stop_the_right_scan_too(clinical_terminators):
+    assert _kept("Cocaine use denied.", "cocaine", side="right") == 0
+    assert _kept("Cocaine use noted; denied heroin.", "cocaine", side="right") == 1
+    assert _kept("Cocaine use noted but denied heroin.", "cocaine", side="right") == 1
+
+
+def test_terminators_solve_the_lab_panel_without_a_window(clinical_terminators):
+    assert _kept(UDS, "cocaine", negation_scope="right") == 1
+    assert _kept(UDS, "cocaine", negation_scope="both") == 1
+    assert _kept(UDS, "amphetamines", negation_scope="right") == 0
+    assert _kept(UDS, "oxycodone", negation_scope="right") == 0
+
+
+def test_terminators_keep_cues_in_the_same_clause(clinical_terminators):
+    assert _kept("Pt. denies cocaine use.", "cocaine") == 0
+    assert _kept("Flu: neg.", "flu", side="right") == 0
+    assert _kept("No cocaine, no heroin.", "heroin") == 0
+
+
+def test_terminator_helpers():
+    t = helper.CLINICAL_SCOPE_TERMINATORS
+    assert helper._after_last_terminator("no a. no b; c", t) == " c"
+    assert helper._after_last_terminator("no cue here", t) == "no cue here"
+    assert helper._before_first_terminator("a but b. c", t) == "a "
+    assert helper._before_first_terminator("plain", t) == "plain"
