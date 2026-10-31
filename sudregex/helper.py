@@ -27,8 +27,83 @@ PRINT = False
 TERMS_LIST: list[str] = []
 TERMS_COMPILED: list[re.Pattern] = []
 
-# Cue and phrase lists shared by the standalone gate wrappers and the one-pass scorer.
-NEGATION_GATE_CUES = ["no ", "not ", "denie", "denial", "doubt", "never", "negative", "without", "neg", "didn't"]
+# ------------------------------------------------------------
+# Negation cues
+# ------------------------------------------------------------
+# The negation gate rejects a match when any cue below occurs in the window scanned next to
+# it (see `negation_scope`). Cues are compiled, case-insensitive, word-bounded patterns,
+# grouped so each group can be reasoned about, tested and switched off on its own.
+#
+# Design rules (details in docs/clinical-negation-review.md):
+# - Only definitive negation. Uncertainty ("rule out", "unlikely", "doubt") and historical or
+#   resolved language ("resolved", "history of") are listed separately below and are NOT cues.
+# - Word boundaries everywhere: "neg" must not match "neglect", "no" must not match "casino".
+# - Multiword phrases only where the single word is not already a cue: "absence of" is listed,
+#   "no evidence of" is not, because "no" already covers it.
+# - Inability ("cannot", "can't", "unable to") is deliberately excluded. In substance-use notes
+#   "can't cut down" and "unable to stop" describe the disorder rather than negate it.
+
+_CUE_FLAGS = re.IGNORECASE | re.MULTILINE
+
+NEGATION_CUE_GROUPS: dict[str, list[str]] = {
+    # no, not, never, without
+    "direct": [r"\bno\b", r"\bnot\b", r"\bnever\b", r"\bwithout\b"],
+    # deny, denies, denied, denying, denial
+    "denial": [r"\bden(?:y|ies|ied|ying|ial)\b"],
+    # neg, neg., negative, negative for, ruled out (but never "rule out")
+    "negative_result": [r"\bneg(?:ative)?\b", r"\bruled\s+out\b"],
+    # didn't / didn’t / didnt and the same three spellings of doesn't, don't, isn't, aren't,
+    # wasn't, weren't, hasn't, haven't, hadn't
+    "contraction": [r"\b(?:do|does|did|is|are|was|were|has|have|had)n['’]?t\b"],
+    # absent, absence of, free of
+    "absence": [r"\babsen(?:t|ce\s+of)\b", r"\bfree\s+of\b"],
+}
+
+NEGATION_GATE_CUES: list = [re.compile(p, _CUE_FLAGS) for group in NEGATION_CUE_GROUPS.values() for p in group]
+
+# The cues shipped through 0.1.8: literal substrings matched anywhere, so "neg" also matched
+# "neglect" and "no " also matched "casino ". Kept so earlier output can be reproduced with
+# `helper.NEGATION_GATE_CUES = list(helper.LEGACY_NEGATION_GATE_CUES)` before extracting.
+LEGACY_NEGATION_GATE_CUES: list[str] = [
+    "no ",
+    "not ",
+    "denie",
+    "denial",
+    "doubt",
+    "never",
+    "negative",
+    "without",
+    "neg",
+    "didn't",
+]
+
+# Uncertainty and historical language. NOT applied by the negation gate: sudregex reports match
+# counts, so a concept is either counted or not, and it has no "possible" or "resolved" state.
+# These lists document the distinction and are available to callers who want to build one.
+UNCERTAINTY_CUES: list = [
+    re.compile(p, _CUE_FLAGS)
+    for p in [
+        r"\brule\s+out\b",
+        r"\br/o\b",
+        r"\bunlikely\b",
+        r"\bdoubt(?:s|ed|ful)?\b",
+        r"\blow\s+(?:suspicion|likelihood|probability)\s+(?:for|of)\b",
+        r"\bpossibl[ey]\b",
+        r"\bquestionable\b",
+    ]
+]
+HISTORICAL_CUES: list = [
+    re.compile(p, _CUE_FLAGS)
+    for p in [
+        r"\bresolved\b",
+        r"\b(?:history|hx|h/o)\s+of\b",
+        r"\bin\s+remission\b",
+        r"\bformer\b",
+        r"\bprior\b",
+        r"\bprevious(?:ly)?\b",
+    ]
+]
+
 DISCHARGE_TERMS = ["discharge instructions", "no results for"]
 
 # Default scan windows, in characters.
@@ -218,16 +293,8 @@ def remove_line_break(
 # Highlighting helpers for previews
 # ============================================================
 
-NEGATION_CUES = [
-    r"\bno\b",
-    r"\bnot\b",
-    r"\bnever\b",
-    r"\bwithout\b",
-    r"\bden(y|ies|ied|ying)\b",
-    r"\bnegative(?:\s+for)?\b",
-    r"\bneg(?:ative)?\.?\b",
-    r"\bdidn['’]t\b",
-]
+# Previews highlight the same cues the gate applies.
+NEGATION_CUES = NEGATION_GATE_CUES
 
 
 def _first_span(pats: list[re.Pattern], text: str) -> tuple[int, int] | None:
@@ -562,9 +629,7 @@ def check_negation(
     here, or the global `negation_scope` when an item does not set one.
     """
     t = t or []
-    cues = list(NEGATION_GATE_CUES)
-    if not neg:
-        cues = []
+    cues = list(NEGATION_GATE_CUES) if neg else []
     cues.extend(t)
 
     side = (side or "left").lower()
@@ -714,7 +779,7 @@ def write_previews_for_item(
         return [m.span() for m in pat_iter(text)]
 
     sub_pats = TERMS_COMPILED[:] if TERMS_COMPILED else []
-    neg_pats = [re.compile(p, re.IGNORECASE | re.MULTILINE) for p in NEGATION_CUES]
+    neg_pats = _compile_gate_terms(NEGATION_GATE_CUES)
 
     rows = []
     hits = df_searched[df_searched[mask_col].fillna(0).astype(int) > 0]
@@ -1385,8 +1450,8 @@ def preview_string_matches(pat, col_name, df_searched, col_check=False, n_notes=
                     s2, e2 = x.span()
                     marked = marked[:s2] + "\x1b[7m" + marked[s2:e2] + "\x1b[0m" + marked[e2:]
 
-            for cue in ["no ", "not ", "denies", "denial", "doubt", "never", "negative for"]:
-                x = re.search(cue, marked, flags=re.IGNORECASE | re.MULTILINE)
+            for cue in _compile_gate_terms(NEGATION_GATE_CUES):
+                x = cue.search(marked)
                 if x:
                     s2, e2 = x.span()
                     marked = marked[:s2] + "\x1b[7m" + marked[s2:e2] + "\x1b[0m" + marked[e2:]
