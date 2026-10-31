@@ -358,6 +358,7 @@ Each item in the pattern library is a dict with these keys:
 | `substance` | bool | Require a substance term nearby? |
 | `negation` | bool | Apply the negation gate? |
 | `negation_scope` | `"left"`, `"right"`, `"both"`, or `False` (optional) | Negation direction for this item only. When omitted, the global `negation_scope` argument is used. See [Per-item negation direction](#per-item-negation-direction). |
+| `negation_window` | positive int (optional) | Characters scanned on each side for negation cues for this item only. Default 65. See [Per-item negation window](#per-item-negation-window). |
 | `preview` | bool | Emit preview snippets? |
 | `common_fp` | list (optional) | Terms that indicate a false positive |
 
@@ -379,9 +380,31 @@ pattern_library = {
 }
 ```
 
+### Negation cues
+
+The negation gate rejects a match when a cue occurs in the window scanned next to it. Cues are compiled, case-insensitive, word-bounded patterns, grouped in `sudregex.helper.NEGATION_CUE_GROUPS`:
+
+| Group | Cues |
+|-------|------|
+| direct | no, not, never, without |
+| denial | deny, denies, denied, denying, denial |
+| negative result | neg, neg., negative, negative for, ruled out |
+| contraction | didn't, doesn't, don't, isn't, aren't, wasn't, weren't, hasn't, haven't, hadn't, each with a straight apostrophe, a curly apostrophe, or none (`didnt`) |
+| absence | absent, absence of, free of |
+
+Word boundaries keep `neg` from matching "neglect" and `no` from matching "casino". Capitalization (`NO`, `Negative`) and trailing punctuation (`neg.`, `denies:`) do not matter. Multiword phrases such as "no evidence of" or "no history of" are not listed because `no` already covers them inside the window.
+
+Some language is deliberately **not** a cue, because sudregex reports match counts and has no state between counted and rejected:
+
+- **Uncertainty**: rule out, r/o, unlikely, doubt, low suspicion for, possible. "Rule out pulmonary embolism" keeps the match counted; "pulmonary embolism was ruled out" rejects it (with a right or both scope). These are collected in `helper.UNCERTAINTY_CUES` for callers who want to build an uncertainty state.
+- **Historical or resolved**: resolved, history of, hx of, in remission, former, prior. "AKI resolved" keeps the match counted; "No AKI" rejects it. Collected in `helper.HISTORICAL_CUES`. Note that "no longer" rejects a match through `no`.
+- **Inability**: cannot, can't, unable to. In substance-use notes "can't cut down" and "unable to stop using" describe the disorder rather than negate it.
+
+Releases through 0.1.8 used literal substrings (`"neg"` matched "neglect", `"denie"` missed "deny", `"doubt"` counted as negation). That list is kept as `helper.LEGACY_NEGATION_GATE_CUES`; to reproduce earlier output set `sudregex.helper.NEGATION_GATE_CUES = list(sudregex.helper.LEGACY_NEGATION_GATE_CUES)` before extracting.
+
 ### Per-item negation direction
 
-The negation gate looks for cues such as "no", "denies" and "negative" in a window around each match. By default one global setting, `negation_scope="left"` (also `"right"` or `"both"`), controls which side of the match is scanned for every item. An item can override that with an optional `negation_scope` key:
+The negation gate looks for cues in a window around each match. By default one global setting, `negation_scope="left"` (also `"right"` or `"both"`), controls which side of the match is scanned for every item. An item can override that with an optional `negation_scope` key:
 
 | Item value | Behavior |
 |------------|----------|
@@ -393,23 +416,42 @@ The negation gate looks for cues such as "no", "denies" and "negative" in a wind
 
 The key only matters when the item has `"negation": True`; it is ignored otherwise. Items that do not set it behave exactly as before, so existing pattern libraries, including the packaged ABC library, produce identical output. An invalid value raises a `ValueError` naming the item.
 
-**When to prefer `left` or `right`.** Pasted lab results put several substances next to each other, so a cue that belongs to one substance can sit next to another. In `amphetamines negative, cocaine positive`, the word "negative" belongs to amphetamines, but it is immediately left of "cocaine". A left or both scan on the cocaine item treats the cocaine match as negated and drops a true positive. Setting the cocaine item to `"right"` keeps it, and setting the amphetamine item to `"right"` still honors its negative result:
+**When to prefer `left` or `right`.** Pasted lab results put several substances next to each other, so a cue that belongs to one substance can sit next to another. In `amphetamines negative, cocaine positive`, the word "negative" belongs to amphetamines, but it is immediately left of "cocaine". A left or both scan on the cocaine item treats the cocaine match as negated and drops a true positive. Setting the cocaine item to `"right"` keeps it, and setting the amphetamine item to `"right"` still honors its negative result. Use `"left"` for narrative text such as "denies cocaine use", where the cue comes first. Use `"right"` when results are written after the substance name, as in lab panels ("cocaine negative"). Use `"both"` when either order is common and neighbouring terms are not a concern.
+
+### Per-item negation window
+
+Each side is scanned 65 characters by default. An item can set `negation_window` (a positive integer) to scan fewer or more characters. A short right-only window reads one result in a drug screen and stops before the next one:
 
 ```python
+# "amphetamines - negative. cocaine - positive. oxycodone - negative."
 pattern_library = {
-    "coc": {"pat": r"cocaine", "col_name": "cocaine", "negation": True, "negation_scope": "right", ...},
-    "amp": {"pat": r"amphetamine", "col_name": "amphetamine", "negation": True, "negation_scope": "right", ...},
+    "coc": {"pat": r"cocaine", "col_name": "cocaine", "negation": True,
+            "negation_scope": "right", "negation_window": 12, ...},
 }
 ```
 
-Use `"left"` for narrative text such as "denies cocaine use", where the cue comes first. Use `"right"` when results are written after the substance name, as in lab panels ("cocaine negative"). Use `"both"` when either order is common and neighbouring terms are not a concern.
+With the default 65-character window, a right scan on `cocaine` still reaches the oxycodone result 20 characters later and wrongly rejects the match; with `negation_window: 12` it reads only `- positive.` and keeps it. The same settings on an amphetamine or oxycodone item still reject their negative results. Items that do not set the key are unchanged.
+
+### Scope terminators (opt-in)
+
+By default the window does not stop at a sentence boundary or a contrast word, so `No fever, but patient has chest pain.` negates "chest pain" and `No pain today. Uses cocaine.` negates "cocaine". To cut the window at the nearest terminator, enable the clinical set before extracting:
+
+```python
+import sudregex
+from sudregex import helper
+
+helper.NEGATION_SCOPE_TERMINATORS = list(helper.CLINICAL_SCOPE_TERMINATORS)  # but, however, although, except, nevertheless, . ;
+result = sudregex.extract_df(df, pattern_library, terms=[...])
+```
+
+The left window then keeps only the text after its last terminator and the right window only the text before its first, so a cue in another clause or sentence no longer reaches the match. "Pt. denies cocaine" still rejects (the cue is after the period) and "Flu: neg." still rejects a right-scanned "flu" (the period is after the cue). This is off by default (`NEGATION_SCOPE_TERMINATORS = []`) so existing output is unchanged. The validator honours the same setting.
 
 ### Known limitations of window-based gating
 
-Every gate scans a fixed number of characters around each match: 100 for substance terms, 65 for negation cues and common false-positive terms, and 250 for discharge context. Two consequences are worth knowing:
+Every gate scans a fixed number of characters around each match: 100 for substance terms, 65 for negation cues (or the item's `negation_window`) and common false-positive terms, and 250 for discharge context. Two consequences are worth knowing:
 
-- **Windows do not stop at sentence boundaries.** A cue in the previous sentence still counts. `No pain today. Uses cocaine.` is treated as negated under the default left scope.
-- **Lab-result text can drop a true positive.** In `amphetamines negative cocaine positive` the word "negative" belongs to amphetamines but sits directly before "cocaine", so a left or both scan on a cocaine item rejects the match. Setting that item's `negation_scope` to `"right"` is the available mitigation. Sentence-aware or result-aware windows are not implemented.
+- **Windows do not stop at sentence boundaries or contrast words unless scope terminators are enabled.** A cue in the previous sentence, or before "but", still counts.
+- **Lab-result text can drop a true positive.** In `amphetamines negative cocaine positive` the word "negative" belongs to amphetamines but sits directly before "cocaine", so a left or both scan on a cocaine item rejects the match. The mitigations are a right scope, a short `negation_window`, or scope terminators.
 
 Each match is judged on its own windows. A match rejected by one gate is never re-counted by another, and a note with several matches of the same item can have some counted and some rejected.
 
@@ -602,6 +644,12 @@ pytest unittests/test_spark.py -v
 - **Previews show only matches that passed the gates.** A preview row for a note that was counted never shows a match the final column rejected. `write_previews_for_item` gained an optional `match_filter` argument; without it the function behaves as before.
 - **Documented the known limitations** of window-based gating (sentence boundaries, lab-result text).
 - **Scores computed with earlier versions may be inflated for multi-match notes.** ABC item scores and any models or analyses built on sudregex 0.1.x output should be regenerated with 0.2.0 before being compared with new results. Single-match notes and the raw and `_SUBSTANCE_MATCHED` columns are unchanged.
+- **Reworked the negation cues.** `helper.NEGATION_GATE_CUES` is now a list of compiled, case-insensitive, word-bounded patterns built from `helper.NEGATION_CUE_GROUPS` (direct, denial, negative result, contraction, absence). Compared with the 0.1.8 substrings: "neg" no longer matches inside "neglect" or "negligible", "no" no longer matches inside "casino", "deny" and "denying" are recognized, "No." and "not." are recognized without a trailing space, every common auxiliary contraction is recognized with a straight apostrophe, a curly apostrophe, or none, "ruled out" (but never "rule out") rejects a match, and "absent", "absence of" and "free of" are cues. "doubt" is no longer a negation cue: it is uncertainty. The old list is kept as `helper.LEGACY_NEGATION_GATE_CUES`. Previews and the validator use the same cues.
+- **Uncertainty and historical language are documented as not-negation.** `helper.UNCERTAINTY_CUES` (rule out, r/o, unlikely, doubt, low suspicion for, possible) and `helper.HISTORICAL_CUES` (resolved, history of, in remission, former, prior) are available but not applied, because the package has no state between counted and rejected.
+- **Added per-item `negation_window`** (characters scanned on each side, default 65), so a right-only scan of a drug-screen result can stop before the next result.
+- **Added opt-in scope terminators** (`helper.NEGATION_SCOPE_TERMINATORS`, with `helper.CLINICAL_SCOPE_TERMINATORS` providing but, however, although, except, nevertheless, period and semicolon). Off by default.
+- **The validator applies the same negation rules as extraction**: the package cues, per-item `negation_scope` and `negation_window`, a new `negation_scope` argument, and the terminators. Its left window no longer includes the match text itself.
+- **Added `unittests/test_clinical_negation.py`** covering direct negation, denial, contractions and transcription variants, negative-result language with and without punctuation, scope and contrast, uncertainty versus negation, historical versus negated, capitalization, strings that must not be cues, the legacy-versus-current cue manifest, `negation_window`, terminators, and validator agreement with extraction.
 
 ### 0.1.8
 
