@@ -17,7 +17,7 @@ A lightweight, high-throughput pipeline for regex-driven extraction with negatio
 - **Configurable negation scope** with `left` (default), `right`, or `both`, set globally or per pattern library item
 - **Substance-context gating** to require matches near a user-supplied vocabulary
 - **Actual match counts** in output columns — not binary flags
-- **Deterministic, gated previews** that only show rows passing all configured gates
+- **Deterministic, gated previews** that only show matches passing all configured gates
 - **Notebook-friendly preview output** via `previews_df`
 - **Line-break normalization** with whitespace cleanup
 - **Packaged defaults** including an ABC pattern library and grouped term lists
@@ -284,11 +284,12 @@ Each pattern library item produces up to three output columns:
 
 | Column | Description |
 |--------|-------------|
-| `col_name` | Raw match count |
+| `col_name` | Raw match count (for items with neither a substance nor a negation gate, this column already has discharge-context and false-positive pruning applied) |
 | `col_name_SUBSTANCE_MATCHED` | Matches that also had a substance term nearby |
-| `col_name_SUBSTANCE_MATCHED_NEG` | Matches that survived negation (final signal) |
+| `col_name_SUBSTANCE_MATCHED_NEG` | Matches that passed every gate: substance, negation, discharge context, and common false positives (final signal) |
+| `col_name_NEG` | Same as above for items with a negation gate but no substance gate |
 
-Column values are **match counts**, not binary flags. A value of `2` means the pattern matched twice in that note.
+Column values are **match counts**, not binary flags. A value of `2` means the pattern matched twice in that note. A match is counted in the final column only if it passes every gate configured for the item. `sudregex.helper.expected_count_columns(pattern_library)` returns the full ordered list of count columns a library produces; the Spark schema is built from the same function.
 
 ### Preview columns
 
@@ -402,6 +403,15 @@ pattern_library = {
 ```
 
 Use `"left"` for narrative text such as "denies cocaine use", where the cue comes first. Use `"right"` when results are written after the substance name, as in lab panels ("cocaine negative"). Use `"both"` when either order is common and neighbouring terms are not a concern.
+
+### Known limitations of window-based gating
+
+Every gate scans a fixed number of characters around each match: 100 for substance terms, 65 for negation cues and common false-positive terms, and 250 for discharge context. Two consequences are worth knowing:
+
+- **Windows do not stop at sentence boundaries.** A cue in the previous sentence still counts. `No pain today. Uses cocaine.` is treated as negated under the default left scope.
+- **Lab-result text can drop a true positive.** In `amphetamines negative cocaine positive` the word "negative" belongs to amphetamines but sits directly before "cocaine", so a left or both scan on a cocaine item rejects the match. Setting that item's `negation_scope` to `"right"` is the available mitigation. Sentence-aware or result-aware windows are not implemented.
+
+Each match is judged on its own windows. A match rejected by one gate is never re-counted by another, and a note with several matches of the same item can have some counted and some rejected.
 
 > **Backward compatibility:** The `checklist=` parameter is a deprecated alias for `pattern_library=`.
 > Files that define a `checklist` variable still work. Both will be supported through the next major version.
@@ -585,6 +595,13 @@ pytest unittests/test_spark.py -v
 - **The final-column counts can therefore differ from results produced with 0.1.7 and 0.1.8.** The raw count and `_SUBSTANCE_MATCHED` columns are unchanged.
 - **Faster extraction.** The pattern is scanned once per note and item instead of up to five times.
 - **Added `unittests/test_per_match_gating.py`** covering matches that fail different gates, discharge on and off, common false positives, and serial vs. parallel agreement.
+- **Reviewed the per-match fix.** Matches are judged in place during a single `finditer` pass, so repeated identical text, adjacent matches, matches at the start or end of a note, and items that match several times under a per-item `negation_scope` are each handled per match. Added `unittests/test_gating_review.py`.
+- **Fixed: zero-row input now yields int64 count columns.** Earlier releases produced a string-typed raw column and the per-match fix produced object-typed columns on an empty input.
+- **Added a differential parity test** (`unittests/test_parity_legacy.py`). The 0.1.8 gate chain is kept verbatim as a test oracle (`unittests/legacy_gating.py`) and run against the new scorer on synthetic notes under every negation scope and discharge setting. Column names, suffixes, order and dtypes are identical. Every divergence is a decrease on a note with two or more matches, caused by the old chain re-counting a match an earlier gate had rejected; a divergence report is written to `unittests/artifacts/parity_divergences.csv`.
+- **Refactored `regex_extract`** into settings resolution, scoring and column assembly. `helper.item_count_columns` and `helper.expected_count_columns` are now the single source of output column names, and `sudregex.spark` builds its schema from them. The duplicate private `_apply_series` was removed from the package root.
+- **Previews show only matches that passed the gates.** A preview row for a note that was counted never shows a match the final column rejected. `write_previews_for_item` gained an optional `match_filter` argument; without it the function behaves as before.
+- **Documented the known limitations** of window-based gating (sentence boundaries, lab-result text).
+- **Scores computed with earlier versions may be inflated for multi-match notes.** ABC item scores and any models or analyses built on sudregex 0.1.x output should be regenerated with 0.2.0 before being compared with new results. Single-match notes and the raw and `_SUBSTANCE_MATCHED` columns are unchanged.
 
 ### 0.1.8
 
