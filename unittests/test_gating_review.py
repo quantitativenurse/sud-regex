@@ -145,17 +145,26 @@ def test_compiled_and_string_patterns_score_the_same():
 
 
 def test_score_row_counts_are_monotone():
-    pat = re.compile(r"cocaine", re.IGNORECASE)
-    kwargs = dict(
+    gates = helper._GateConfig(
+        pat=re.compile(r"cocaine", re.IGNORECASE),
         substance=helper._compile_gate_terms(["oxycodone"]),
         neg_pats=helper._compile_gate_terms(helper.NEGATION_GATE_CUES),
         side="left",
         dis_pats=helper._compile_gate_terms(helper.DISCHARGE_TERMS),
         fp_pats=[],
-        win_substance=helper.WIN_SUBSTANCE,
-        win_negation=helper.WIN_NEGATION,
-        win_discharge=helper.WIN_DISCHARGE,
-        win_fp=helper.WIN_CFP,
     )
-    raw, sub, final = helper._score_row("Denies cocaine, on oxycodone. " + FILLER + "cocaine.", pat=pat, **kwargs)
-    assert (raw, sub, final) == (2, 1, 0)
+    text = "Denies cocaine, on oxycodone. " + FILLER + "cocaine."
+    assert helper._score_row(text, gates) == (2, 1, 0)
+    verdicts = list(helper._iter_match_verdicts(text, gates))
+    assert [(v[2], v[3]) for v in verdicts] == [(True, False), (False, False)]
+    assert helper._passing_spans(text, gates) == []
+
+
+def test_shared_column_naming_matches_spark_and_extract_output():
+    from sudregex import spark as sudregex_spark
+
+    lib = sudregex.pattern_library_abc
+    assert sudregex_spark.expected_count_columns(lib) == helper.expected_count_columns(lib)
+    df = pd.DataFrame({"note_id": ["1"], "note_text": ["Routine visit."]})
+    out = sudregex.extract_df(df, lib, termslist=sudregex.default_termslist, terms_active="opioid_terms")
+    assert list(out.columns) == ["note_id", *helper.expected_count_columns(lib)]

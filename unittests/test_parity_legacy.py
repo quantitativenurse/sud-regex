@@ -232,10 +232,14 @@ def _check_parity(df, lib, terms, *, side, exclude_discharge, label):
     divergences = []
     for idx, nid in enumerate(old["note_id"]):
         text = text_by_id[nid]
+        verdicts_by_item = {
+            key: _match_verdicts(text, cfg, terms=terms, side=side, exclude_discharge=exclude_discharge)
+            for key, cfg in lib.items()
+        }
         for col, key in cols_by_item.items():
             o, n = int(old.at[idx, col]), int(new.at[idx, col])
             cfg = lib[key]
-            verdicts = _match_verdicts(text, cfg, terms=terms, side=side, exclude_discharge=exclude_discharge)
+            verdicts = verdicts_by_item[key]
             ref_old = _legacy_columns(verdicts, cfg)[col]
             ref_new = _per_match_columns(verdicts, cfg)[col]
             assert o == ref_old, f"{label}: legacy oracle disagrees with reference on {nid}/{col}: {o} vs {ref_old}"
