@@ -40,6 +40,11 @@ legacy_regex_extract = _load_legacy()
 
 ARTIFACTS = Path(__file__).with_name("artifacts")
 
+# The negation cues shipped in 0.1.8, frozen here so that later changes to the package's cue
+# list cannot alter what this test measures. Both paths run with these cues, which isolates
+# the per-match change from any cue change.
+LEGACY_CUES_0_1_8 = ["no ", "not ", "denie", "denial", "doubt", "never", "negative", "without", "neg", "didn't"]
+
 LONG = " " + "The weather was mild and the clinic schedule stayed routine all week. " * 4
 SHORT = " "
 
@@ -96,10 +101,21 @@ def _legacy_pipeline():
         helper.regex_extract = original
 
 
+@contextlib.contextmanager
+def _legacy_cues():
+    original = helper.NEGATION_GATE_CUES
+    helper.NEGATION_GATE_CUES = list(LEGACY_CUES_0_1_8)
+    try:
+        yield
+    finally:
+        helper.NEGATION_GATE_CUES = original
+
+
 def _both(df, lib, **kwargs):
-    new = sudregex.extract_df(df, lib, **kwargs)
-    with _legacy_pipeline():
-        old = sudregex.extract_df(df, lib, **kwargs)
+    with _legacy_cues():
+        new = sudregex.extract_df(df, lib, **kwargs)
+        with _legacy_pipeline():
+            old = sudregex.extract_df(df, lib, **kwargs)
     return old, new
 
 
@@ -149,7 +165,7 @@ def _match_verdicts(text, cfg, *, terms, side, exclude_discharge):
         if has_neg:
             left = text[max(0, s - helper.WIN_NEGATION) : s] if side in ("left", "both") else ""
             right = text[e : e + helper.WIN_NEGATION] if side in ("right", "both") else ""
-            cues = helper.NEGATION_GATE_CUES
+            cues = LEGACY_CUES_0_1_8
             v["negation"] = not (_contains(cues, left) or _contains(cues, right))
         if prune and exclude_discharge:
             v["discharge"] = not _contains(
