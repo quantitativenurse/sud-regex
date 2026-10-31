@@ -310,9 +310,54 @@ def test_cue_groups_compose_the_gate_list():
 def test_preview_highlights_the_cue_word_only(tmp_path):
     lib = _item("cocaine", preview=True)
     # The cue sits outside the 65-character negation window but inside the 120-character preview.
-    filler = "Routine visit, vitals stable, no acute distress noted today in clinic. " + "x" * 10 + " "
+    filler = "Routine visit, vitals stable, patient comfortable and chatting in clinic today. " + "x" * 5 + " "
     df = pd.DataFrame({"note_id": ["1"], "note_text": ["Flu: neg. " + filler + "Reports cocaine use."]})
     _, previews = sudregex.extract_df(
         df, lib, terms=["x"], preview_count=1, return_previews_df=True, preview_file=str(tmp_path / "p.txt")
     )
     assert "((neg))." in previews.at[0, "snippet_marked"]
+
+
+# ---------- per-item negation_window ----------
+
+UDS = "amphetamines - negative. cocaine - positive. oxycodone - negative."
+
+
+def test_negation_window_lets_a_right_scan_stop_before_the_next_result():
+    # Right scope alone still sees the oxycodone result 20 characters away.
+    assert _kept(UDS, "cocaine", negation_scope="right") == 0
+    # A short right window reads only the cocaine result.
+    assert _kept(UDS, "cocaine", negation_scope="right", negation_window=12) == 1
+    # The other two results are still honoured with the same settings.
+    assert _kept(UDS, "amphetamines", negation_scope="right", negation_window=12) == 0
+    assert _kept(UDS, "oxycodone", negation_scope="right", negation_window=12) == 0
+
+
+def test_negation_window_applies_to_left_and_both():
+    text = "No fever today. Cocaine positive."
+    assert _kept(text, "cocaine") == 0
+    assert _kept(text, "cocaine", negation_window=10) == 1
+    assert _kept("Cocaine use was never confirmed", "cocaine", negation_scope="both", negation_window=12) == 1
+    assert _kept("Cocaine use was never confirmed", "cocaine", negation_scope="both", negation_window=30) == 0
+
+
+def test_negation_window_default_is_package_window():
+    assert helper._resolve_negation_window("t", {}) == helper.WIN_NEGATION == 65
+    assert helper._resolve_negation_window("t", {"negation_window": None}) == 65
+
+
+@pytest.mark.parametrize("bad", [0, -5, 2.5, "65", True])
+def test_negation_window_rejects_bad_values(bad):
+    with pytest.raises(ValueError, match="'t'"):
+        _kept("no cocaine", "cocaine", negation_window=bad)
+
+
+def test_negation_window_ignored_when_negation_is_off():
+    df = pd.DataFrame({"note_id": ["1"], "note_text": ["no cocaine"]})
+    lib = _item("cocaine", negation=False, negation_window=5)
+    out = sudregex.extract_df(df, lib, terms=["x"])
+    assert out.at[0, "c"] == 1 and "c_NEG" not in out.columns
+
+
+def test_published_library_sets_no_window():
+    assert not any("negation_window" in cfg for cfg in sudregex.pattern_library_abc.values())

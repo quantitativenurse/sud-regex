@@ -1023,6 +1023,22 @@ def _resolve_negation_scope(item_key, item_cfg, global_scope: str) -> tuple[str,
     )
 
 
+def _resolve_negation_window(item_key, item_cfg) -> int:
+    """
+    Resolve the negation window, in characters, for one pattern library item.
+
+    The optional per-item `negation_window` key overrides the package default `WIN_NEGATION`
+    (65). It must be a positive integer. Short windows suit result lists such as a urine drug
+    screen, where the next substance's result is only a few characters away.
+    """
+    raw = item_cfg.get("negation_window")
+    if raw is None:
+        return WIN_NEGATION
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        raise ValueError(f"Pattern library item {item_key!r}: negation_window must be a positive integer; got {raw!r}")
+    return raw
+
+
 def _as_compiled(pat) -> re.Pattern:
     """Return a compiled pattern, compiling raw strings with the package's default flags."""
     if isinstance(pat, re.Pattern):
@@ -1111,6 +1127,7 @@ def _resolve_item_settings(item_key, item_cfg, global_scope: str, exclude_discha
         side=side,
         dis_pats=_compile_gate_terms(DISCHARGE_TERMS) if should_prune and exclude_discharge_mentions else [],
         fp_pats=_compile_gate_terms(common_fp) if should_prune else [],
+        win_negation=_resolve_negation_window(item_key, item_cfg),
     )
     count_columns = item_count_columns(item_cfg)
     return _ItemSettings(
@@ -1264,7 +1281,9 @@ def regex_extract(
 
     Negation direction is taken from the optional per-item `negation_scope` key in
     the pattern library (`"left"`, `"right"`, `"both"`, or `False`), falling back to
-    the global `negation_scope` argument when an item does not set one.
+    the global `negation_scope` argument when an item does not set one. The optional
+    per-item `negation_window` key sets how many characters are scanned on each side,
+    falling back to `WIN_NEGATION`.
 
     The input note text is assumed to have been normalized upstream.
     """
@@ -1275,6 +1294,7 @@ def regex_extract(
     # Fail early on a bad per-item value rather than partway through a long run.
     for key in pattern_library:
         _resolve_negation_scope(key, pattern_library[key], negation_scope)
+        _resolve_negation_window(key, pattern_library[key])
 
     _dbg(
         f"[DEBUG] Starting regex_extract: df_to_analyze.shape={df_to_analyze.shape}, "
