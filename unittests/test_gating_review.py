@@ -168,3 +168,41 @@ def test_shared_column_naming_matches_spark_and_extract_output():
     df = pd.DataFrame({"note_id": ["1"], "note_text": ["Routine visit."]})
     out = sudregex.extract_df(df, lib, termslist=sudregex.default_termslist, terms_active="opioid_terms")
     assert list(out.columns) == ["note_id", *helper.expected_count_columns(lib)]
+
+
+# ---------- previews only show matches that passed the gates ----------
+
+
+def test_preview_shows_a_match_that_passed_every_gate(tmp_path):
+    lib = _item(opioid=True, preview=True)
+    first = "Denies cocaine use, on oxycodone. "
+    text = first + FILLER + "Reports cocaine use, on oxycodone."
+    df = pd.DataFrame({"note_id": ["1"], "note_text": [text]})
+    out, previews = sudregex.extract_df(
+        df,
+        lib,
+        terms=["oxycodone"],
+        preview_count=5,
+        return_previews_df=True,
+        preview_file=str(tmp_path / "previews.txt"),
+    )
+    assert out.at[0, "coc_SUBSTANCE_MATCHED_NEG"] == 1
+    assert len(previews) == 1
+    assert previews.at[0, "span_start"] >= len(first)
+    assert "Reports [[cocaine]]" in previews.at[0, "snippet_marked"]
+    assert "Denies [[cocaine]]" not in previews.at[0, "snippet_marked"]
+
+
+def test_write_previews_without_filter_still_shows_first_match(tmp_path):
+    text = "Denies cocaine use. " + FILLER + "Reports cocaine use."
+    df = pd.DataFrame({"note_id": ["1"], "note_text": [text], "mask": [1]})
+    rows = helper.write_previews_for_item(df, "t", r"cocaine", "mask", n_notes=None)
+    assert len(rows) == 1 and rows[0]["span_start"] == len("Denies ")
+    rows = helper.write_previews_for_item(df, "t", r"cocaine", "mask", n_notes=None, match_filter=lambda t: [])
+    assert rows == []
+
+
+def test_package_root_has_no_private_apply_series():
+    assert not hasattr(sudregex, "_apply_series")
+    df = pd.DataFrame({"note_id": ["1"], "note_text": ["line one$+$line two cocaine"]})
+    assert sudregex.extract_df(df, _item(), terms=["x"]).at[0, "coc"] == 1

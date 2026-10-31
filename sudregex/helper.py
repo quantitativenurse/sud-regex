@@ -685,9 +685,15 @@ def write_previews_for_item(
     *,
     highlight: bool = True,
     highlight_style: str = "brackets",
+    match_filter=None,
 ):
     """
-    Write preview snippets for rows where `mask_col == 1`.
+    Write preview snippets for rows where `mask_col > 0`.
+
+    One snippet is written per sampled row, around the first eligible match. By default
+    every match of `pat` is eligible. `match_filter`, when given, maps a note's text to the
+    spans that are eligible, so `regex_extract` passes the matches that passed every gate
+    and a preview never shows a match the final column did not count.
 
     Each returned row includes:
     - item key
@@ -701,6 +707,12 @@ def write_previews_for_item(
         if hasattr(pat, "finditer")
         else (lambda t: re.finditer(pat, t, flags=re.IGNORECASE | re.MULTILINE))
     )
+
+    def _eligible_spans(text: str):
+        if match_filter is not None:
+            return list(match_filter(text))
+        return [m.span() for m in pat_iter(text)]
+
     sub_pats = TERMS_COMPILED[:] if TERMS_COMPILED else []
     neg_pats = [re.compile(p, re.IGNORECASE | re.MULTILINE) for p in NEGATION_CUES]
 
@@ -722,8 +734,7 @@ def write_previews_for_item(
             nid = r.get(note_id_col, None)
             found = False
 
-            for m in pat_iter(text):
-                s, e = m.span()
+            for s, e in _eligible_spans(text):
                 L, _, snippet = _window(text, s, e, left_chars, right_chars)
                 rel_hit = (s - L, e - L)
                 sub_span = _first_span(sub_pats, snippet) if sub_pats else None
@@ -1254,6 +1265,7 @@ def regex_extract(
                 outfile=preview_file,
                 highlight=True,
                 highlight_style="brackets",
+                match_filter=partial(_passing_spans, gates=settings.gates),
             )
             if rows:
                 previews_acc.extend(rows)
