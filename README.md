@@ -5,7 +5,7 @@
 
 # sudregex
 
-> **Version:** 0.1.8
+> **Version:** 0.2.0
 
 A lightweight, high-throughput pipeline for regex-driven extraction with negation and false-positive pruning. Developed for Substance Use Disorder (SUD) research, but the core extraction workflow is flexible enough for broader clinical text mining use cases.
 
@@ -14,10 +14,10 @@ A lightweight, high-throughput pipeline for regex-driven extraction with negatio
 ## ✨ Features
 
 - **Unified gating utilities** for substance context, negation, common false-positive pruning, and discharge-context filtering
-- **Configurable negation scope** with `left` (default), `right`, or `both`
+- **Configurable negation scope** with `left` (default), `right`, or `both`, set globally or per pattern library item
 - **Substance-context gating** to require matches near a user-supplied vocabulary
 - **Actual match counts** in output columns — not binary flags
-- **Deterministic, gated previews** that only show rows passing all configured gates
+- **Deterministic, gated previews** that only show matches passing all configured gates
 - **Notebook-friendly preview output** via `previews_df`
 - **Line-break normalization** with whitespace cleanup
 - **Packaged defaults** including an ABC pattern library and grouped term lists
@@ -284,11 +284,12 @@ Each pattern library item produces up to three output columns:
 
 | Column | Description |
 |--------|-------------|
-| `col_name` | Raw match count |
+| `col_name` | Raw match count (for items with neither a substance nor a negation gate, this column already has discharge-context and false-positive pruning applied) |
 | `col_name_SUBSTANCE_MATCHED` | Matches that also had a substance term nearby |
-| `col_name_SUBSTANCE_MATCHED_NEG` | Matches that survived negation (final signal) |
+| `col_name_SUBSTANCE_MATCHED_NEG` | Matches that passed every gate: substance, negation, discharge context, and common false positives (final signal) |
+| `col_name_NEG` | Same as above for items with a negation gate but no substance gate |
 
-Column values are **match counts**, not binary flags. A value of `2` means the pattern matched twice in that note.
+Column values are **match counts**, not binary flags. A value of `2` means the pattern matched twice in that note. A match is counted in the final column only if it passes every gate configured for the item. `sudregex.helper.expected_count_columns(pattern_library)` returns the full ordered list of count columns a library produces; the Spark schema is built from the same function.
 
 ### Preview columns
 
@@ -356,6 +357,7 @@ Each item in the pattern library is a dict with these keys:
 | `col_name` | str | Output column name |
 | `substance` | bool | Require a substance term nearby? |
 | `negation` | bool | Apply the negation gate? |
+| `negation_scope` | `"left"`, `"right"`, `"both"`, or `False` (optional) | Negation direction for this item only. When omitted, the global `negation_scope` argument is used. See [Per-item negation direction](#per-item-negation-direction). |
 | `preview` | bool | Emit preview snippets? |
 | `common_fp` | list (optional) | Terms that indicate a false positive |
 
@@ -376,6 +378,40 @@ pattern_library = {
     },
 }
 ```
+
+### Per-item negation direction
+
+The negation gate looks for cues such as "no", "denies" and "negative" in a window around each match. By default one global setting, `negation_scope="left"` (also `"right"` or `"both"`), controls which side of the match is scanned for every item. An item can override that with an optional `negation_scope` key:
+
+| Item value | Behavior |
+|------------|----------|
+| `"left"` | Scan only the text before the match |
+| `"right"` | Scan only the text after the match |
+| `"both"` | Scan both sides |
+| `False` (or `"false"` / `"off"`) | Keep the item's `_NEG` columns but apply no negation cues |
+| omitted or `None` | Use the global `negation_scope` argument (default `"left"`) |
+
+The key only matters when the item has `"negation": True`; it is ignored otherwise. Items that do not set it behave exactly as before, so existing pattern libraries, including the packaged ABC library, produce identical output. An invalid value raises a `ValueError` naming the item.
+
+**When to prefer `left` or `right`.** Pasted lab results put several substances next to each other, so a cue that belongs to one substance can sit next to another. In `amphetamines negative, cocaine positive`, the word "negative" belongs to amphetamines, but it is immediately left of "cocaine". A left or both scan on the cocaine item treats the cocaine match as negated and drops a true positive. Setting the cocaine item to `"right"` keeps it, and setting the amphetamine item to `"right"` still honors its negative result:
+
+```python
+pattern_library = {
+    "coc": {"pat": r"cocaine", "col_name": "cocaine", "negation": True, "negation_scope": "right", ...},
+    "amp": {"pat": r"amphetamine", "col_name": "amphetamine", "negation": True, "negation_scope": "right", ...},
+}
+```
+
+Use `"left"` for narrative text such as "denies cocaine use", where the cue comes first. Use `"right"` when results are written after the substance name, as in lab panels ("cocaine negative"). Use `"both"` when either order is common and neighbouring terms are not a concern.
+
+### Known limitations of window-based gating
+
+Every gate scans a fixed number of characters around each match: 100 for substance terms, 65 for negation cues and common false-positive terms, and 250 for discharge context. Two consequences are worth knowing:
+
+- **Windows do not stop at sentence boundaries.** A cue in the previous sentence still counts. `No pain today. Uses cocaine.` is treated as negated under the default left scope.
+- **Lab-result text can drop a true positive.** In `amphetamines negative cocaine positive` the word "negative" belongs to amphetamines but sits directly before "cocaine", so a left or both scan on a cocaine item rejects the match. Setting that item's `negation_scope` to `"right"` is the available mitigation. Sentence-aware or result-aware windows are not implemented.
+
+Each match is judged on its own windows. A match rejected by one gate is never re-counted by another, and a note with several matches of the same item can have some counted and some rejected.
 
 > **Backward compatibility:** The `checklist=` parameter is a deprecated alias for `pattern_library=`.
 > Files that define a `checklist` variable still work. Both will be supported through the next major version.
@@ -550,6 +586,23 @@ pytest unittests/test_spark.py -v
 
 ## Changelog
 
+### 0.2.0
+
+- **Added per-item negation direction.** Pattern library items accept an optional `negation_scope` key (`"left"`, `"right"`, `"both"`, or `False`). When an item does not set it, the global `negation_scope` argument is used, so existing pattern libraries and the packaged ABC library produce identical output.
+- **Documented the lab-result case** (`amphetamines negative, cocaine positive`) and when to prefer `left` or `right`.
+- **Added `unittests/test_negation_scope.py`** covering each setting, the global fallback, validation, the lab-result case, and a regression check of the packaged library.
+- **Fixed: final match counts now apply every gate per match.** Previously the substance, negation, discharge and common-false-positive checks each re-counted every match in the note, so a match that failed an earlier check could still be counted in the final `_NEG` / `_SUBSTANCE_MATCHED_NEG` column. Each match is now checked against all configured gates once, and counted only if it passes all of them. Notes with a single match are unaffected; on notes with several matches the final count can be lower than in earlier versions. In a 100,000-note sample this changed 193 notes (about 15% fewer counted matches overall), and the number of notes flagged changed only for `opioid_mention`.
+- **The final-column counts can therefore differ from results produced with 0.1.7 and 0.1.8.** The raw count and `_SUBSTANCE_MATCHED` columns are unchanged.
+- **Faster extraction.** The pattern is scanned once per note and item instead of up to five times.
+- **Added `unittests/test_per_match_gating.py`** covering matches that fail different gates, discharge on and off, common false positives, and serial vs. parallel agreement.
+- **Reviewed the per-match fix.** Matches are judged in place during a single `finditer` pass, so repeated identical text, adjacent matches, matches at the start or end of a note, and items that match several times under a per-item `negation_scope` are each handled per match. Added `unittests/test_gating_review.py`.
+- **Fixed: zero-row input now yields int64 count columns.** Earlier releases produced a string-typed raw column and the per-match fix produced object-typed columns on an empty input.
+- **Added a differential parity test** (`unittests/test_parity_legacy.py`). The 0.1.8 gate chain is kept verbatim as a test oracle (`unittests/legacy_gating.py`) and run against the new scorer on synthetic notes under every negation scope and discharge setting. Column names, suffixes, order and dtypes are identical. Every divergence is a decrease on a note with two or more matches, caused by the old chain re-counting a match an earlier gate had rejected; a divergence report is written to `unittests/artifacts/parity_divergences.csv`.
+- **Refactored `regex_extract`** into settings resolution, scoring and column assembly. `helper.item_count_columns` and `helper.expected_count_columns` are now the single source of output column names, and `sudregex.spark` builds its schema from them. The duplicate private `_apply_series` was removed from the package root.
+- **Previews show only matches that passed the gates.** A preview row for a note that was counted never shows a match the final column rejected. `write_previews_for_item` gained an optional `match_filter` argument; without it the function behaves as before.
+- **Documented the known limitations** of window-based gating (sentence boundaries, lab-result text).
+- **Scores computed with earlier versions may be inflated for multi-match notes.** ABC item scores and any models or analyses built on sudregex 0.1.x output should be regenerated with 0.2.0 before being compared with new results. Single-match notes and the raw and `_SUBSTANCE_MATCHED` columns are unchanged.
+
 ### 0.1.8
 
 - **Added `run_sudregex(...)`** — a unified entry point with `environment="local"|"databricks"` for selecting local pandas or distributed Databricks/Spark execution.
@@ -597,7 +650,7 @@ MIT — see [LICENSE](LICENSE) for details.
 
 If `sudregex` is useful in your work, please cite:
 
-> Quantitative Nurse Lab. (2025). *sudregex* (Version 0.1.8). GitHub. https://github.com/quantitativenurse/sud-regex
+> Quantitative Nurse Lab. (2025). *sudregex* (Version 0.2.0). GitHub. https://github.com/quantitativenurse/sud-regex
 
 ### Acknowledgements
 

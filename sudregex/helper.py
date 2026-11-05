@@ -10,7 +10,7 @@ generation, and backend-aware row execution for serial and parallel workflows.
 import os
 import re
 from functools import partial
-from typing import Iterable, List
+from typing import Any, Iterable, List, NamedTuple
 from typing import Pattern as RePattern
 from typing import Tuple, Union
 
@@ -26,6 +26,10 @@ PRINT = False
 # Active term vocabulary configured at runtime.
 TERMS_LIST: list[str] = []
 TERMS_COMPILED: list[re.Pattern] = []
+
+# Cue and phrase lists shared by the standalone gate wrappers and the one-pass scorer.
+NEGATION_GATE_CUES = ["no ", "not ", "denie", "denial", "doubt", "never", "negative", "without", "neg", "didn't"]
+DISCHARGE_TERMS = ["discharge instructions", "no results for"]
 
 # Default scan windows, in characters.
 WIN_SUBSTANCE = 100
@@ -553,9 +557,12 @@ def check_negation(
     - `"left"`
     - `"right"`
     - `"both"`
+
+    `regex_extract` passes the per-item `negation_scope` from the pattern library
+    here, or the global `negation_scope` when an item does not set one.
     """
     t = t or []
-    cues = ["no ", "not ", "denie", "denial", "doubt", "never", "negative", "without", "neg", "didn't"]
+    cues = list(NEGATION_GATE_CUES)
     if not neg:
         cues = []
     cues.extend(t)
@@ -642,7 +649,7 @@ def discharge_instructions(
     """
     Exclude matches found within discharge-instruction contexts.
     """
-    discharge_terms = ["discharge instructions", "no results for"]
+    discharge_terms = list(DISCHARGE_TERMS)
     return gate_by_terms(
         df=df_searched,
         pat=pat,
@@ -678,9 +685,15 @@ def write_previews_for_item(
     *,
     highlight: bool = True,
     highlight_style: str = "brackets",
+    match_filter=None,
 ):
     """
-    Write preview snippets for rows where `mask_col == 1`.
+    Write preview snippets for rows where `mask_col > 0`.
+
+    One snippet is written per sampled row, around the first eligible match. By default
+    every match of `pat` is eligible. `match_filter`, when given, maps a note's text to the
+    spans that are eligible, so `regex_extract` passes the matches that passed every gate
+    and a preview never shows a match the final column did not count.
 
     Each returned row includes:
     - item key
@@ -694,6 +707,12 @@ def write_previews_for_item(
         if hasattr(pat, "finditer")
         else (lambda t: re.finditer(pat, t, flags=re.IGNORECASE | re.MULTILINE))
     )
+
+    def _eligible_spans(text: str):
+        if match_filter is not None:
+            return list(match_filter(text))
+        return [m.span() for m in pat_iter(text)]
+
     sub_pats = TERMS_COMPILED[:] if TERMS_COMPILED else []
     neg_pats = [re.compile(p, re.IGNORECASE | re.MULTILINE) for p in NEGATION_CUES]
 
@@ -715,8 +734,7 @@ def write_previews_for_item(
             nid = r.get(note_id_col, None)
             found = False
 
-            for m in pat_iter(text):
-                s, e = m.span()
+            for s, e in _eligible_spans(text):
                 L, _, snippet = _window(text, s, e, left_chars, right_chars)
                 rel_hit = (s - L, e - L)
                 sub_span = _first_span(sub_pats, snippet) if sub_pats else None
@@ -876,6 +894,279 @@ def previews_batch(
 # ============================================================
 
 
+_NEGATION_SIDES = {"left", "right", "both"}
+_NEGATION_OFF = {"false", "off", "none"}
+
+
+def item_count_columns(item_cfg) -> list[str]:
+    """
+    Return the ordered match-count columns one pattern library item emits.
+
+    - every item emits a raw-count column named `col_name`
+    - items with substance/opioid gating add `<col>_SUBSTANCE_MATCHED`
+    - items that also negate add `<col>_SUBSTANCE_MATCHED_NEG`
+    - negation-only items add `<col>_NEG`
+
+    The last column listed carries the item's final, fully gated count. This is the single
+    source of truth for output column names; `sudregex.spark` builds its schema from it.
+    """
+    col_name = item_cfg["col_name"]
+    has_substance = bool(item_cfg.get("substance") or item_cfg.get("opioid"))
+    has_negation = bool(item_cfg.get("negation"))
+    cols = [col_name]
+    if has_substance:
+        cols.append(f"{col_name}_SUBSTANCE_MATCHED")
+    if has_negation:
+        cols.append(f"{col_name}_SUBSTANCE_MATCHED_NEG" if has_substance else f"{col_name}_NEG")
+    return cols
+
+
+def expected_count_columns(pattern_library) -> list[str]:
+    """Return the ordered match-count columns `regex_extract` emits for a whole pattern library."""
+    cols: list[str] = []
+    for key in pattern_library:
+        cols.extend(item_count_columns(pattern_library[key]))
+    return cols
+
+
+def _resolve_negation_scope(item_key, item_cfg, global_scope: str) -> tuple[str, bool]:
+    """
+    Resolve the negation direction for one pattern library item.
+
+    The optional per-item `negation_scope` key takes precedence over the global
+    `negation_scope` passed to the extraction call. Allowed per-item values:
+    - `"left"`, `"right"`, `"both"`: scan that side of each match for cues
+    - `False` (or `"false"` / `"off"`): keep the item's `_NEG` columns but apply no cues
+
+    When the key is missing or `None`, the global scope is used unchanged.
+
+    Returns `(side, apply_cues)`.
+    """
+    raw = item_cfg.get("negation_scope")
+    if raw is None:
+        return global_scope, True
+    if raw is False:
+        return global_scope, False
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        if value in _NEGATION_OFF:
+            return global_scope, False
+        if value in _NEGATION_SIDES:
+            return value, True
+    raise ValueError(
+        f"Pattern library item {item_key!r}: negation_scope must be 'left', 'right', 'both', or False; got {raw!r}"
+    )
+
+
+def _as_compiled(pat) -> re.Pattern:
+    """Return a compiled pattern, compiling raw strings with the package's default flags."""
+    if isinstance(pat, re.Pattern):
+        return pat
+    return re.compile(str(pat), re.IGNORECASE | re.MULTILINE)
+
+
+def _compile_gate_terms(terms) -> list[re.Pattern]:
+    """
+    Compile gate terms into patterns that report whether any term occurs in a context.
+
+    Plain strings are matched literally and case-insensitively, and are combined into a
+    single alternation so each context is searched once. Compiled patterns are kept as given.
+    """
+    literal = [re.escape(str(t)) for t in (terms or []) if not isinstance(t, re.Pattern)]
+    out = [re.compile("|".join(literal), re.IGNORECASE | re.MULTILINE)] if literal else []
+    out.extend(t for t in (terms or []) if isinstance(t, re.Pattern))
+    return out
+
+
+class _GateConfig(NamedTuple):
+    """
+    Compiled gates for one pattern library item.
+
+    - `substance`: compiled substance terms, or `None` when the item has no substance gate
+    - `neg_pats`: compiled negation cues, `[]` when negation is on but applies no cues,
+      or `None` when the item has no negation gate
+    - `dis_pats` / `fp_pats`: discharge and false-positive terms; empty means that gate is off
+    """
+
+    pat: re.Pattern
+    substance: list | None
+    neg_pats: list | None
+    side: str
+    dis_pats: list
+    fp_pats: list
+    win_substance: int = WIN_SUBSTANCE
+    win_negation: int = WIN_NEGATION
+    win_discharge: int = WIN_DISCHARGE
+    win_fp: int = WIN_CFP
+
+
+class _ItemSettings(NamedTuple):
+    """Resolved settings for one pattern library item: gates, flags and output column names."""
+
+    key: str
+    col_name: str
+    pat: Any
+    has_substance: bool
+    has_negation: bool
+    has_common_fp: bool
+    side: str
+    apply_cues: bool
+    preview: bool
+    gates: _GateConfig
+    count_columns: list[str]
+    active_col: str
+
+
+def _resolve_item_settings(item_key, item_cfg, global_scope: str, exclude_discharge_mentions: bool) -> _ItemSettings:
+    """
+    Resolve one pattern library item into its compiled gates and output column names.
+
+    Discharge-context and common-false-positive pruning only run for items that negate or
+    have no substance gate; substance-only items are not pruned.
+    """
+    pat = item_cfg["pat"]
+    col_name = item_cfg["col_name"]
+    has_substance = bool(item_cfg.get("substance") or item_cfg.get("opioid"))
+    has_negation = bool(item_cfg.get("negation"))
+    common_fp = item_cfg.get("common_fp") or []
+    side, apply_cues = _resolve_negation_scope(item_key, item_cfg, global_scope)
+    should_prune = has_negation or not has_substance
+
+    if not has_negation:
+        neg_pats = None
+    elif apply_cues:
+        neg_pats = _compile_gate_terms(NEGATION_GATE_CUES)
+    else:
+        neg_pats = []
+
+    gates = _GateConfig(
+        pat=_as_compiled(pat),
+        substance=_compile_gate_terms(TERMS_LIST) if has_substance else None,
+        neg_pats=neg_pats,
+        side=side,
+        dis_pats=_compile_gate_terms(DISCHARGE_TERMS) if should_prune and exclude_discharge_mentions else [],
+        fp_pats=_compile_gate_terms(common_fp) if should_prune else [],
+    )
+    count_columns = item_count_columns(item_cfg)
+    return _ItemSettings(
+        key=item_key,
+        col_name=col_name,
+        pat=pat,
+        has_substance=has_substance,
+        has_negation=has_negation,
+        has_common_fp=bool(common_fp),
+        side=side,
+        apply_cues=apply_cues,
+        preview=bool(item_cfg.get("preview")),
+        gates=gates,
+        count_columns=count_columns,
+        active_col=count_columns[-1],
+    )
+
+
+def _iter_match_verdicts(text: str, gates: _GateConfig):
+    """
+    Yield `(start, end, substance_passed, all_passed)` for every match of the item in `text`.
+
+    Each match is judged on its own window for every configured gate, so a match rejected by
+    one gate is never re-counted by another. Matches are the non-overlapping ones
+    `re.finditer` yields, so the number yielded equals the raw `findall` count.
+    """
+    for m in gates.pat.finditer(text):
+        s, e = m.span()
+
+        substance_passed = True
+        if gates.substance is not None:
+            ctx = text[max(0, s - gates.win_substance) : e + gates.win_substance]
+            substance_passed = any(p.search(ctx) for p in gates.substance)
+        passed = substance_passed
+
+        if passed and gates.neg_pats:
+            left = text[max(0, s - gates.win_negation) : s] if gates.side in ("left", "both") else ""
+            right = text[e : e + gates.win_negation] if gates.side in ("right", "both") else ""
+            passed = not (any(p.search(left) for p in gates.neg_pats) or any(p.search(right) for p in gates.neg_pats))
+
+        if passed and gates.dis_pats:
+            ctx = text[max(0, s - gates.win_discharge) : e + gates.win_discharge]
+            passed = not any(p.search(ctx) for p in gates.dis_pats)
+
+        if passed and gates.fp_pats:
+            ctx = text[max(0, s - gates.win_fp) : e + gates.win_fp]
+            passed = not any(p.search(ctx) for p in gates.fp_pats)
+
+        yield s, e, substance_passed, passed
+
+
+def _score_row(text: str, gates: _GateConfig) -> tuple[int, int, int]:
+    """
+    Score one note for one pattern library item in a single pass over its matches.
+
+    Returns `(raw, substance_passed, final)` match counts, where `final` counts only the
+    matches that pass every configured gate.
+    """
+    raw = substance_passed = final = 0
+    for _, _, sub_ok, ok in _iter_match_verdicts(text, gates):
+        raw += 1
+        substance_passed += sub_ok
+        final += ok
+    return raw, substance_passed, final
+
+
+def _passing_spans(text: str, gates: _GateConfig) -> list[tuple[int, int]]:
+    """Return the spans of the matches in `text` that pass every configured gate."""
+    return [(s, e) for s, e, _, ok in _iter_match_verdicts(text, gates) if ok]
+
+
+def _score_item(
+    settings: _ItemSettings,
+    df_to_analyze: pd.DataFrame,
+    *,
+    use_parallel: bool = False,
+    parallel_backend: str | None = None,
+    n_workers: int | None = None,
+) -> pd.DataFrame:
+    """
+    Score every note for one item.
+
+    Returns a frame with `note_id`, `note_text` and int64 `_raw`, `_substance`, `_final`
+    counts, in the row order of `df_to_analyze`.
+    """
+    work = df_to_analyze[["note_id", "note_text"]].copy()
+    scores = _apply_series(
+        work["note_text"],
+        partial(_score_row, gates=settings.gates),
+        use_parallel=use_parallel,
+        parallel_backend=parallel_backend,
+        n_workers=n_workers,
+    )
+    # Cast explicitly so a zero-row input still yields int64 count columns.
+    work[["_raw", "_substance", "_final"]] = pd.DataFrame(
+        scores.tolist(), columns=["_raw", "_substance", "_final"], index=work.index
+    ).astype("int64")
+    return work
+
+
+def _assemble_item_columns(settings: _ItemSettings, scores: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build an item's output columns from its per-row scores.
+
+    - with a substance or negation gate, `col_name` holds the raw match count
+    - `<col>_SUBSTANCE_MATCHED` counts matches with a substance term nearby
+    - the final column (`_NEG` or `_SUBSTANCE_MATCHED_NEG`) counts matches passing every gate
+    - with neither gate, `col_name` itself holds the discharge/false-positive pruned count
+    """
+    out = scores[["note_id"]].copy()
+    if settings.has_substance or settings.has_negation:
+        out[settings.col_name] = scores["_raw"]
+    else:
+        out[settings.col_name] = scores["_final"]
+    if settings.has_substance:
+        out[settings.count_columns[1]] = scores["_substance"]
+    if settings.has_negation:
+        out[settings.active_col] = scores["_final"]
+    return out
+
+
 def regex_extract(
     pattern_library,
     df_to_analyze,
@@ -896,17 +1187,29 @@ def regex_extract(
     """
     Apply the pattern library to the prepared input DataFrame.
 
-    This function:
-    - computes base regex matches
-    - applies substance and negation gating when configured
-    - applies discharge-context and false-positive pruning when configured
-    - optionally emits previews for pattern library items marked with `preview=True`
+    For each item this function:
+    - resolves the item's settings (`_resolve_item_settings`)
+    - scores every note in a single pass over its matches (`_score_item`)
+    - assembles the item's output columns (`_assemble_item_columns`)
+    - optionally emits previews for items marked with `preview=True`
+
+    Each match is checked against every configured gate (substance, negation, discharge
+    context, common false positives), and the final column counts only the matches that
+    pass all of them.
+
+    Negation direction is taken from the optional per-item `negation_scope` key in
+    the pattern library (`"left"`, `"right"`, `"both"`, or `False`), falling back to
+    the global `negation_scope` argument when an item does not set one.
 
     The input note text is assumed to have been normalized upstream.
     """
     negation_scope = (negation_scope or "left").lower()
-    if negation_scope not in {"left", "right", "both"}:
+    if negation_scope not in _NEGATION_SIDES:
         raise ValueError("negation_scope must be 'left', 'right', or 'both'")
+
+    # Fail early on a bad per-item value rather than partway through a long run.
+    for key in pattern_library:
+        _resolve_negation_scope(key, pattern_library[key], negation_scope)
 
     _dbg(
         f"[DEBUG] Starting regex_extract: df_to_analyze.shape={df_to_analyze.shape}, "
@@ -916,171 +1219,45 @@ def regex_extract(
 
     previews_acc: list[dict] = []
 
-    for i in pattern_library:
-        _dbg(f"\n[DEBUG] Pattern library item index: {i}")
+    for key in pattern_library:
         actual_rows = df_to_analyze.shape[0]
-        _dbg(f"[DEBUG]  → df_to_analyze has {actual_rows} rows")
         assert actual_rows == expected_row_count, f"Row counts do not match ({actual_rows} != {expected_row_count})"
 
-        pat = pattern_library[i]["pat"]
-        col_name = pattern_library[i]["col_name"]
-        _dbg(f"[DEBUG]  → pattern='{pat.pattern if hasattr(pat, 'pattern') else pat}', col_name='{col_name}'")
+        settings = _resolve_item_settings(key, pattern_library[key], negation_scope, exclude_discharge_mentions)
+        _dbg(
+            f"\n[DEBUG] Item {key}: col_name='{settings.col_name}', substance={settings.has_substance}, "
+            f"negation={settings.has_negation}, scope={settings.side}, cues={settings.apply_cues}"
+        )
 
-        has_substance = bool(pattern_library[i].get("substance") or pattern_library[i].get("opioid"))
-        has_negation = bool(pattern_library[i].get("negation"))
-        _dbg(f"[DEBUG]  → substance={has_substance}, negation={has_negation}")
-
-        _dbg(f"[DEBUG]  → Calling regex_search_file for '{col_name}'")
-        df_searched = regex_search_file(
-            pat,
-            col_name,
+        scores = _score_item(
+            settings,
             df_to_analyze,
-            metadata,
-            preview=True,
             use_parallel=use_parallel,
             parallel_backend=parallel_backend,
             n_workers=n_workers,
         )
-        base_sum = int(pd.to_numeric(df_searched[col_name], errors="coerce").fillna(0).sum())
-        _dbg(f"[DEBUG]  → After regex_search_file: df_searched['{col_name}'].sum()={base_sum}")
+        item_cols = _assemble_item_columns(settings, scores)
+        _dbg(
+            f"[DEBUG]  → '{settings.col_name}': raw={int(scores['_raw'].sum())}, "
+            f"final({settings.active_col})={int(scores['_final'].sum())}"
+        )
 
-        active_col = col_name
-
-        if has_substance:
-            _dbg(f"[DEBUG]  → Entering substance branch for '{col_name}'")
-            if base_sum > 0:
-                df_searched = check_for_substance(
-                    pat,
-                    col_name,
-                    f"{col_name}_SUBSTANCE_MATCHED",
-                    df_searched,
-                    span=WIN_SUBSTANCE,
-                    use_parallel=use_parallel,
-                    parallel_backend=parallel_backend,
-                    n_workers=n_workers,
-                )
-                active_col = f"{col_name}_SUBSTANCE_MATCHED"
-                sub_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
-                _dbg(f"[DEBUG]    • After check_for_substance: {sub_sum} matches")
-
-                if has_negation:
-                    _dbg("[DEBUG]    • Entering negation checks")
-                    if sub_sum > 0:
-                        df_searched = check_negation(
-                            pat,
-                            active_col,
-                            f"{active_col}_NEG",
-                            df_searched,
-                            t=[],
-                            neg=True,
-                            span=WIN_NEGATION,
-                            side=negation_scope,
-                            use_parallel=use_parallel,
-                            parallel_backend=parallel_backend,
-                            n_workers=n_workers,
-                        )
-                        active_col = f"{active_col}_NEG"
-                        neg_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
-                        _dbg(f"[DEBUG]    • After check_negation: {neg_sum} kept")
-                    else:
-                        df_searched[f"{active_col}_NEG"] = 0
-                        active_col = f"{active_col}_NEG"
-                        _dbg(f"[DEBUG]    • No substance matches; set {active_col}=0")
-            else:
-                df_searched[f"{col_name}_SUBSTANCE_MATCHED"] = 0
-                if has_negation:
-                    df_searched[f"{col_name}_SUBSTANCE_MATCHED_NEG"] = 0
-                    active_col = f"{col_name}_SUBSTANCE_MATCHED_NEG"
-                else:
-                    active_col = f"{col_name}_SUBSTANCE_MATCHED"
-                _dbg(f"[DEBUG]    • No initial matches; zeroed {active_col}")
-
-        elif has_negation:
-            _dbg(f"[DEBUG]  → Entering negation-only branch for '{col_name}'")
-            if base_sum > 0:
-                df_searched = check_negation(
-                    pat,
-                    col_name,
-                    f"{col_name}_NEG",
-                    df_searched,
-                    t=[],
-                    neg=True,
-                    span=WIN_NEGATION,
-                    side=negation_scope,
-                    use_parallel=use_parallel,
-                    parallel_backend=parallel_backend,
-                    n_workers=n_workers,
-                )
-                active_col = f"{col_name}_NEG"
-                neg_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
-                _dbg(f"[DEBUG]    • After check_negation: {neg_sum} negated")
-            else:
-                df_searched[f"{col_name}_NEG"] = 0
-                active_col = f"{col_name}_NEG"
-                _dbg(f"[DEBUG]    • No initial matches; set {active_col}=0")
-
-        else:
-            _dbg(f"[DEBUG]  → No substance/negation flags for '{col_name}' (base branch)")
-
-        should_prune = has_negation or not has_substance
-
-        if active_col in df_searched.columns:
-            pre_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
-            _dbg(f"[DEBUG]    • Before pruning on {active_col}: {pre_sum} kept")
-
-            if should_prune and pre_sum > 0:
-                if exclude_discharge_mentions:
-                    df_searched = discharge_instructions(
-                        pat,
-                        df_searched,
-                        active_col,
-                        span=WIN_DISCHARGE,
-                        use_parallel=use_parallel,
-                        parallel_backend=parallel_backend,
-                        n_workers=n_workers,
-                    )
-                    post_dis = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
-                    _dbg(f"[DEBUG]    • After discharge_instructions on {active_col}: {post_dis} kept")
-
-                common_fp = pattern_library[i].get("common_fp") or []
-                if common_fp:
-                    df_searched = check_common_false_positives(
-                        pat,
-                        df_searched,
-                        active_col,
-                        common_fp,
-                        span=WIN_CFP,
-                        use_parallel=use_parallel,
-                        parallel_backend=parallel_backend,
-                        n_workers=n_workers,
-                    )
-                    post_fp = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
-                    _dbg(f"[DEBUG]    • After common FP pruning on {active_col}: {post_fp} kept")
-            else:
-                _dbg(
-                    f"[DEBUG]    • Skipping pruning for {active_col} "
-                    f"(matches={pre_sum}, has_substance={has_substance}, has_negation={has_negation})"
-                )
-        else:
-            _dbg(f"[DEBUG]    • Skipping pruning (missing column {active_col})")
-
-        if active_col not in df_searched.columns:
-            df_searched[active_col] = 0
-
-        if pattern_library[i].get("preview"):
-            _dbg(f"[DEBUG]  → Writing previews for '{col_name}' from mask '{active_col}'")
-            sub_win = WIN_SUBSTANCE if has_substance else 0
-            neg_win = WIN_NEGATION if has_negation else 0
-            fp_win = WIN_CFP if pattern_library[i].get("common_fp") else 0
+        if settings.preview:
+            _dbg(f"[DEBUG]  → Writing previews for '{settings.col_name}' from mask '{settings.active_col}'")
+            sub_win = WIN_SUBSTANCE if settings.has_substance else 0
+            neg_win = WIN_NEGATION if settings.has_negation else 0
+            fp_win = WIN_CFP if settings.has_common_fp else 0
             dis_win = WIN_DISCHARGE if exclude_discharge_mentions else 0
             left_req = max(preview_span, sub_win, neg_win, fp_win, dis_win)
             right_req = left_req
 
+            with_text = item_cols.assign(note_text=scores["note_text"])
+            df_searched = metadata.merge(with_text, how="left", on="note_id")
             rows = write_previews_for_item(
                 df_searched=df_searched,
-                item_key=i,
-                pat=pat,
-                mask_col=active_col,
+                item_key=key,
+                pat=settings.pat,
+                mask_col=settings.active_col,
                 n_notes=preview_count,
                 left_chars=left_req,
                 right_chars=right_req,
@@ -1088,29 +1265,13 @@ def regex_extract(
                 outfile=preview_file,
                 highlight=True,
                 highlight_style="brackets",
+                match_filter=partial(_passing_spans, gates=settings.gates),
             )
             if rows:
                 previews_acc.extend(rows)
 
-        merge_cols = ["note_id", col_name]
-        if has_substance:
-            merge_cols.append(f"{col_name}_SUBSTANCE_MATCHED")
-        if has_negation and has_substance:
-            merge_cols.append(f"{col_name}_SUBSTANCE_MATCHED_NEG")
-        elif has_negation and not has_substance:
-            merge_cols.append(f"{col_name}_NEG")
-        if active_col not in merge_cols:
-            merge_cols.append(active_col)
-
-        for mc in merge_cols:
-            if mc not in df_searched.columns:
-                df_searched[mc] = 0
-
-        cur_sum = int(pd.to_numeric(df_searched[active_col], errors="coerce").fillna(0).sum())
-        _dbg(f"[DEBUG]  → SUMMARY '{col_name}': base={base_sum} | active({active_col})={cur_sum}")
-        _dbg(f"[DEBUG]  → Merging columns {merge_cols} into metadata (active_col={active_col})")
-
-        metadata = metadata.merge(df_searched[merge_cols], on="note_id", how="left")
+        _dbg(f"[DEBUG]  → Merging columns {settings.count_columns} into metadata")
+        metadata = metadata.merge(item_cols, on="note_id", how="left")
 
     metadata = metadata.merge(df_to_analyze[["note_id", "note_text"]], on="note_id", how="left")
     _dbg(f"[DEBUG] Finished regex_extract: metadata.shape={metadata.shape}")

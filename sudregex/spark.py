@@ -32,7 +32,10 @@ The Spark return schema is generated from the selected pattern library rather
 than hard-coded, so a custom pattern library automatically produces the right
 output columns.
 """
+
 from typing import List, Optional
+
+from .helper import expected_count_columns as _expected_count_columns
 
 SUPPORTED_ENVIRONMENTS = {"local", "databricks"}
 
@@ -55,35 +58,9 @@ def _resolve_library(pattern_library, keys=None):
     return obj
 
 
-def expected_count_columns(pattern_library_obj) -> List[str]:
-    """
-    Return the ordered list of match-count output columns produced by
-    ``regex_extract`` for the given (already-resolved) pattern library.
-
-    This replicates exactly the ``merge_cols`` logic in ``helper.regex_extract``
-    so the generated Spark schema matches the local pandas output column for
-    column:
-
-    - every pattern emits a raw-count column named ``col_name``;
-    - patterns with substance/opioid matching add ``<col>_SUBSTANCE_MATCHED``;
-    - those that also negate add ``<col>_SUBSTANCE_MATCHED_NEG``;
-    - negation-only patterns (no substance) add ``<col>_NEG``.
-    """
-    cols: List[str] = []
-    for key in pattern_library_obj:
-        cfg = pattern_library_obj[key]
-        col_name = cfg["col_name"]
-        has_substance = bool(cfg.get("substance") or cfg.get("opioid"))
-        has_negation = bool(cfg.get("negation"))
-
-        cols.append(col_name)
-        if has_substance:
-            cols.append(f"{col_name}_SUBSTANCE_MATCHED")
-        if has_negation and has_substance:
-            cols.append(f"{col_name}_SUBSTANCE_MATCHED_NEG")
-        elif has_negation and not has_substance:
-            cols.append(f"{col_name}_NEG")
-    return cols
+# Output column names come from the same function regex_extract uses, so the Spark schema
+# matches the local pandas output column for column by construction.
+expected_count_columns = _expected_count_columns
 
 
 def output_columns(
