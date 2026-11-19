@@ -60,22 +60,22 @@ Also: people usually install from PyPI (`pip install sudregex==X.Y.Z`). A PyPI v
 
 As of November 2026: 0.1.0–0.1.8 are on PyPI, but GitHub has only two tags (`v0.1.0`, `v0.1.2`), no Releases, no `CITATION.cff` and no DOI. The README asks people to cite "Version 0.2.0", which is on `main` but not on PyPI or tagged. This matters here because 0.2.0 changes final match counts compared with 0.1.x, so a paper has to say which side of that line it's on.
 
-The full convention applies from 0.2.0 on. Older versions get a tag where a commit can be matched, and a Release + DOI only if a paper used them. Commits below were matched by PyPI upload time, commit time and the version in `pyproject.toml`. Confirm each against the PyPI files before tagging.
+No lab paper has used the sudregex package yet. So the full convention starts at 0.2.0, the first version to get a Release + DOI. Older versions only get a tag, where a commit can be matched, so anyone can find the code behind each PyPI version. Commits below were matched by PyPI upload time, commit time and the version in `pyproject.toml`. Confirm each against the PyPI files before tagging.
 
 | Version | On PyPI | Matching commit | Tag today | What it would need |
 |---|---|---|---|---|
-| 0.1.0 | 2025-09-25 | `d0c1b40` | `v0.1.0` | Release + DOI if a paper used it |
-| 0.1.1 | 2025-09-25 | `c7e50fa` (or `14dc12e`, lint-only difference) | none | Tag; Release + DOI if a paper used it |
-| 0.1.2 | 2025-09-25 | `978910f` | `v0.1.2` | Release + DOI if a paper used it |
+| 0.1.0 | 2025-09-25 | `d0c1b40` | `v0.1.0` | Nothing, already tagged |
+| 0.1.1 | 2025-09-25 | `c7e50fa` (or `14dc12e`, lint-only difference) | none | Tag |
+| 0.1.2 | 2025-09-25 | `978910f` | `v0.1.2` | Nothing, already tagged |
 | 0.1.3 | 2025-10-27 | none, built before the version bump was committed | none | Can't be tagged exactly. Note it in the README. |
 | 0.1.4 | 2025-10-27 | probably `61c2d34` (committed after upload) | none | Confirm against the PyPI files, then tag |
-| 0.1.5 | 2025-11-25 | `603409f` | none | Tag; Release + DOI if a paper used it |
-| 0.1.6 | 2026-03-12 | `f860352` (lint-only after `e61dc0f`) | none | Tag; Release + DOI if a paper used it |
-| 0.1.7 | 2026-06-19 | `93cc96f` | none | Tag; Release + DOI if a paper used it |
-| 0.1.8 | 2026-07-14 | `7c28933` | none | Tag; Release + DOI if a paper used it |
+| 0.1.5 | 2025-11-25 | `603409f` | none | Tag |
+| 0.1.6 | 2026-03-12 | `f860352` (lint-only after `e61dc0f`) | none | Tag |
+| 0.1.7 | 2026-06-19 | `93cc96f` | none | Tag |
+| 0.1.8 | 2026-07-14 | `7c28933` | none | Tag |
 | 0.2.0 | not yet | `main` (`62f884b`) | none | Release + DOI + PyPI upload, all from the same commit |
 
-**One-time setup, before any release goes out:** switch the repo on in Zenodo (an org owner may need to approve the Zenodo app for the `quantitativenurse` org first). Turn on release immutability. Add a `CITATION.cff` and point the README citation at the DOI. Zenodo's docs don't say whether a new Release on an old tag gets archived, so check on the first one. If it doesn't, Zenodo also takes a manual zip upload.
+**One-time setup, before any release goes out:** switch the repo on in Zenodo (an org owner may need to approve the Zenodo app for the `quantitativenurse` org first). Turn on release immutability. Add a `CITATION.cff` and point the README citation at the DOI.
 
 **Sample methods sentence**
 
